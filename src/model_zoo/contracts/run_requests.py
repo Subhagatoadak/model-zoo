@@ -9,6 +9,9 @@ class EvaluationSpec:
     metric_ids: List[str]
     y_true_key: str = "y"
     y_pred_source: str = "predictions"
+    compute_train: bool = True
+    compute_valid: bool = True
+    train_indices: Optional[List[int]] = None
     test_indices: Optional[List[int]] = None
     bindings: Dict[str, Any] = field(default_factory=dict)  # metric_id -> ExecutionBinding
 
@@ -17,6 +20,9 @@ class EvaluationSpec:
             "metric_ids": self.metric_ids,
             "y_true_key": self.y_true_key,
             "y_pred_source": self.y_pred_source,
+            "compute_train": self.compute_train,
+            "compute_valid": self.compute_valid,
+            "train_indices": self.train_indices,
             "test_indices": self.test_indices,
             "bindings": {k: (None if v is None else v.to_dict()) for k, v in self.bindings.items()},
         }
@@ -67,7 +73,9 @@ class ModelRunResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
-    eval_scores: Dict[str, float] = field(default_factory=dict)
+    eval_train: Dict[str, float] = field(default_factory=dict)
+    eval_valid: Dict[str, float] = field(default_factory=dict)
+    summary: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class MetricComputeRequest:

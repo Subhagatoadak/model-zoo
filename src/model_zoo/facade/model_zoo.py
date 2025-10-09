@@ -56,56 +56,105 @@ class ModelZoo:
     def get_run_result(self, run_id: str, actor: str = "system") -> ModelRunResult:
         res = self.model_runner.result(run_id)
         self._audit("RUN_RESULT", actor, run_id, {"status": res.status.value})
-        # Inline evaluation if an evaluation spec exists for this run and predictions are available
+        # Inline evaluation: compute train/valid metrics and R-style summary
         if getattr(self, "_eval_specs", None) and run_id in self._eval_specs:
             plan = self._eval_specs[run_id]
             spec: EvaluationSpec = plan["spec"]
             y_true_ref = plan.get("y_true")
             if res.status.name == "SUCCEEDED" and res.predictions is not None and y_true_ref is not None:
-                # Only compute if not already computed
-                if not res.eval_scores:
-                    try:
-                        # Prefer inline lists for demo evaluation
-                        if y_true_ref.ref_type.name == "INLINE" and res.predictions.ref_type.name == "INLINE":
-                            yt = y_true_ref
-                            yp = res.predictions
-                            # Apply test indices if provided
-                            if spec.test_indices:
-                                try:
-                                    ytv = [yt.inline[i] for i in spec.test_indices]
-                                    ypv = [yp.inline[i] for i in spec.test_indices]
-                                    from ..contracts.io import DataRef, DataRefType
-                                    yt = DataRef(ref_type=DataRefType.INLINE, inline=ytv)
-                                    yp = DataRef(ref_type=DataRefType.INLINE, inline=ypv)
-                                except Exception:
-                                    pass
-                            # Prepare bindings
-                            bindings = spec.bindings or {}
-                            # Fallback to binding registry if present
-                            if not bindings and self.binding_registry is not None:
-                                try:
-                                    bindings = {mid: self.binding_registry.get_metric_binding(mid) for mid in spec.metric_ids}
-                                except Exception:
-                                    bindings = {}
-                            # Compute metrics
-                            results: Dict[str, MetricComputeResult] = {}
-                            for mid in spec.metric_ids:
-                                b = bindings.get(mid)
-                                if b is None:
-                                    continue
-                                mc_req = MetricComputeRequest(
-                                    metric_id=mid,
-                                    direction=self.metric_registry.get(mid).direction.value,
-                                    y_true=yt,
-                                    y_pred=yp,
-                                    binding=b,
-                                )
-                                mres = self.metric_runner.compute(mc_req)
-                                results[mid] = mres
-                            res.eval_scores = {k: v.score for k, v in results.items()}
-                    except Exception:
-                        pass
+                try:
+                    if y_true_ref.ref_type.name == "INLINE" and res.predictions.ref_type.name == "INLINE":
+                        from ..contracts.io import DataRef, DataRefType
+
+                        def slice_ref(r, idxs):
+                            if not idxs:
+                                return r
+                            vals = [r.inline[i] for i in idxs]
+                            return DataRef(ref_type=DataRefType.INLINE, inline=vals)
+
+                        # Prepare metric bindings
+                        bindings = spec.bindings or {}
+                        if not bindings and self.binding_registry is not None:
+                            try:
+                                bindings = {mid: self.binding_registry.get_metric_binding(mid) for mid in spec.metric_ids}
+                            except Exception:
+                                bindings = {}
+
+                        # Compute train metrics
+                        if spec.compute_train:
+                            yt_train = slice_ref(y_true_ref, spec.train_indices)
+                            yp_train = slice_ref(res.predictions, spec.train_indices)
+                            res.eval_train = self._compute_metrics_set(spec.metric_ids, yt_train, yp_train, bindings)
+
+                        # Compute validation metrics
+                        if spec.compute_valid and spec.test_indices:
+                            yt_test = slice_ref(y_true_ref, spec.test_indices)
+                            yp_test = slice_ref(res.predictions, spec.test_indices)
+                            res.eval_valid = self._compute_metrics_set(spec.metric_ids, yt_test, yp_test, bindings)
+
+                        # Build an R-style summary structure
+                        res.summary = self._build_r_style_summary(run_id, res, spec, y_true_ref)
+                except Exception:
+                    pass
         return res
+
+    def _compute_metrics_set(self, metric_ids: List[str], y_true, y_pred, bindings: Dict[str, Any]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for mid in metric_ids:
+            b = bindings.get(mid)
+            if b is None:
+                continue
+            mc_req = MetricComputeRequest(
+                metric_id=mid,
+                direction=self.metric_registry.get(mid).direction.value,
+                y_true=y_true,
+                y_pred=y_pred,
+                binding=b,
+            )
+            mres = self.metric_runner.compute(mc_req)
+            out[mid] = mres.score
+        return out
+
+    def _build_r_style_summary(self, run_id: str, res: ModelRunResult, spec: EvaluationSpec, y_true_ref: Any) -> Dict[str, Any]:
+        # Minimal R-like summary with sections: Call, Residuals summary, Coefficients, Fit stats, Metrics
+        call = {}
+        try:
+            # best effort: reflect binding info from metadata if runner recorded it
+            call = res.metadata.get("binding", {})
+        except Exception:
+            call = {}
+
+        # Coefficients: rely on diagnostics for coefficient-like entries
+        coefficients = res.diagnostics if isinstance(res.diagnostics, dict) else {}
+
+        # Fit stats (train) if available
+        fit: Dict[str, Any] = {}
+        if res.eval_train:
+            # Common keys: r2_v1, mse_v1
+            r2 = res.eval_train.get("r2_v1")
+            mse = res.eval_train.get("mse_v1")
+            fit.update({k: v for k, v in [("r_squared", r2), ("mse", mse)] if v is not None})
+
+        sizes = {}
+        try:
+            n = len(y_true_ref.inline) if getattr(y_true_ref, "inline", None) is not None else None
+            n_train = len(spec.train_indices) if spec.train_indices else None
+            n_valid = len(spec.test_indices) if spec.test_indices else None
+            sizes = {"n": n, "n_train": n_train, "n_valid": n_valid}
+        except Exception:
+            pass
+
+        summary = {
+            "Call": call,
+            "Coefficients": coefficients,
+            "Fit": fit,
+            "Sizes": sizes,
+            "Metrics": {
+                "train": res.eval_train,
+                "validation": res.eval_valid,
+            },
+        }
+        return summary
 
     def compute_metric(self, req: MetricComputeRequest, actor: str = "system") -> MetricComputeResult:
         spec = self.metric_registry.get(req.metric_id)

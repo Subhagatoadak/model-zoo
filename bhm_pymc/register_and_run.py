@@ -136,6 +136,9 @@ def main():
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
             y_true_key="y",
+            compute_train=True,
+            compute_valid=True,
+            train_indices=train_idx,
             test_indices=test_idx,
             bindings={
                 "r2_v1": r2_binding,
@@ -155,9 +158,14 @@ def main():
 
     lin_handle = zoo.submit_run(lin_req, actor="you")
     lin_res = wait_for_result(zoo, lin_handle.run_id, actor="you")
-    print("LinearRegression: status=", lin_res.status.value, "coefficients=", lin_res.diagnostics)
-    # Metrics computed automatically based on evaluation spec
-    print("LinearRegression metrics:", lin_res.eval_scores)
+    print("LinearRegression: status=", lin_res.status.value)
+    print("LinearRegression summary:")
+    print("  Call:", lin_res.summary.get("Call"))
+    print("  Coefficients:", lin_res.summary.get("Coefficients"))
+    print("  Fit:", lin_res.summary.get("Fit"))
+    print("  Sizes:", lin_res.summary.get("Sizes"))
+    print("  Metrics (train):", lin_res.summary.get("Metrics", {}).get("train"))
+    print("  Metrics (validation):", lin_res.summary.get("Metrics", {}).get("validation"))
 
     # Switch to Bayesian linear regression (swap model_id + binding + params) with same split
     bayes_req = ModelRunRequest(
@@ -170,6 +178,9 @@ def main():
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
             y_true_key="y",
+            compute_train=True,
+            compute_valid=True,
+            train_indices=train_idx,
             test_indices=test_idx,
             bindings={
                 "r2_v1": r2_binding,
@@ -179,8 +190,14 @@ def main():
     )
     bayes_handle = zoo.submit_run(bayes_req, actor="you")
     bayes_res = wait_for_result(zoo, bayes_handle.run_id, actor="you")
-    print("BayesLinear: status=", bayes_res.status.value, "params=", bayes_res.diagnostics)
-    print("BayesLinear metrics:", bayes_res.eval_scores)
+    print("BayesLinear: status=", bayes_res.status.value)
+    print("BayesLinear summary:")
+    print("  Call:", bayes_res.summary.get("Call"))
+    print("  Coefficients:", bayes_res.summary.get("Coefficients"))
+    print("  Fit:", bayes_res.summary.get("Fit"))
+    print("  Sizes:", bayes_res.summary.get("Sizes"))
+    print("  Metrics (train):", bayes_res.summary.get("Metrics", {}).get("train"))
+    print("  Metrics (validation):", bayes_res.summary.get("Metrics", {}).get("validation"))
 
 if __name__ == "__main__":
     main()
