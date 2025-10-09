@@ -51,9 +51,14 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
     draws = int(params.get("draws", 1000))
     tune = int(params.get("tune", 1000))
     target_accept = float(params.get("target_accept", 0.9))
+    chains = int(params.get("chains", 1))
+    cores = int(params.get("cores", 1))
+    progressbar = bool(params.get("progressbar", False))
+    compute_convergence_checks = bool(params.get("compute_convergence_checks", False))
 
     priors = params.get("priors", {}) or {}
     beta_prior = priors.get("beta", {})
+    beta_dist = (beta_prior.get("distribution") or "normal").lower()
     # Support scalar or per-feature vectors for mu and tau
     p = X_arr.shape[1]
     mu_raw = beta_prior.get("mu", 0.0)
@@ -69,27 +74,42 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
     else:
         beta_tau = float(tau_raw)
     sigma_prior = priors.get("sigma", {})
+    sigma_dist = (sigma_prior.get("distribution") or "half_normal").lower()
     sigma_scale = float(sigma_prior.get("scale", 1.0))
 
     with pm.Model() as model:
         alpha = pm.Normal("alpha", mu=0.0, sigma=10.0)
-        # beta vector if p>1, otherwise scalar
+        # beta prior
+        if beta_dist not in ("normal",):
+            raise ValueError(f"Unsupported beta prior distribution: {beta_dist}")
         if p == 1:
             beta = pm.Normal("beta", mu=beta_mu, sigma=beta_tau)
             mu = alpha + beta * X_train
         else:
             beta = pm.Normal("beta", mu=beta_mu, sigma=beta_tau, shape=p)
             mu = alpha + pm.math.dot(X_train, beta)
-        sigma = pm.HalfNormal("sigma", sigma=sigma_scale)
+
+        # sigma prior
+        if sigma_dist in ("half_normal", "halfnormal"):
+            sigma = pm.HalfNormal("sigma", sigma=sigma_scale)
+        elif sigma_dist in ("gamma", "erlang"):
+            # shape-rate parameterization
+            shape = float(sigma_prior.get("shape") or sigma_prior.get("alpha") or 2.0)
+            rate = float(sigma_prior.get("rate") or sigma_prior.get("beta") or max(1e-6, 1.0))
+            sigma = pm.Gamma("sigma", alpha=shape, beta=rate)
+        else:
+            raise ValueError(f"Unsupported sigma prior distribution: {sigma_dist}")
         pm.Normal("y_obs", mu=mu, sigma=sigma, observed=y_train)
 
         idata = pm.sample(
             draws=draws,
             tune=tune,
-            chains=1,
+            chains=chains,
+            cores=cores,
             target_accept=target_accept,
             random_seed=getattr(context, "random_seed", None),
-            progressbar=False,
+            progressbar=progressbar,
+            compute_convergence_checks=compute_convergence_checks,
         )
 
     # Posterior means
@@ -101,7 +121,13 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
 
     y_pred = (alpha_mean + (X_arr * beta_mean if p == 1 else X_arr.dot(beta_mean))).tolist()
 
-    diagnostics: Dict[str, Any] = {"alpha": alpha_mean, "draws": draws, "tune": tune, "target_accept": target_accept}
+    diagnostics: Dict[str, Any] = {
+        "alpha": alpha_mean,
+        "draws": draws,
+        "tune": tune,
+        "target_accept": target_accept,
+        "chains": chains,
+    }
     # add named coefficients
     if p == 1:
         name = feature_names[0]
@@ -113,5 +139,9 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
     return {
         "predictions": y_pred,
         "diagnostics": diagnostics,
-        "metadata": {"model": "pymc_linear_nuts", "feature_names": feature_names},
+        "metadata": {
+            "model": "pymc_linear_nuts",
+            "feature_names": feature_names,
+            "priors": {"beta": {"distribution": beta_dist}, "sigma": {"distribution": sigma_dist}},
+        },
     }

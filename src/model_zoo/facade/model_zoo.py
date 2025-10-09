@@ -135,6 +135,14 @@ class ModelZoo:
                         res.summary = self._build_r_style_summary(run_id, res, spec, y_true_ref)
                     except Exception:
                         self._log.debug("Failed to build summary", exc_info=True)
+        # If summary is still empty (e.g., no evaluation spec provided), build a minimal one
+        if res.status.name == "SUCCEEDED" and not res.summary:
+            try:
+                plan = self._eval_specs.get(run_id) if getattr(self, "_eval_specs", None) else None
+                y_true_ref = plan.get("y_true") if plan else None
+                res.summary = self._build_r_style_summary(run_id, res, None, y_true_ref)
+            except Exception:
+                self._log.debug("Failed to build minimal summary", exc_info=True)
         return res
 
     def _compute_metrics_set(self, metric_ids: List[str], y_true, y_pred, bindings: Dict[str, Any]) -> Dict[str, float]:
@@ -164,7 +172,7 @@ class ModelZoo:
                 # Continue to next metric
         return out
 
-    def _build_r_style_summary(self, run_id: str, res: ModelRunResult, spec: EvaluationSpec, y_true_ref: Any) -> Dict[str, Any]:
+    def _build_r_style_summary(self, run_id: str, res: ModelRunResult, spec: Optional[EvaluationSpec], y_true_ref: Any) -> Dict[str, Any]:
         # Minimal R-like summary with sections: Call, Residuals summary, Coefficients, Fit stats, Metrics
         # Prefer explicit call info if runner provided; fall back to binding
         call = {}
@@ -187,9 +195,9 @@ class ModelZoo:
 
         sizes = {}
         try:
-            n = len(y_true_ref.inline) if getattr(y_true_ref, "inline", None) is not None else None
-            n_train = len(spec.train_indices) if spec.train_indices else None
-            n_valid = len(spec.test_indices) if spec.test_indices else None
+            n = len(y_true_ref.inline) if (y_true_ref is not None and getattr(y_true_ref, "inline", None) is not None) else None
+            n_train = len(spec.train_indices) if (spec is not None and spec.train_indices) else None
+            n_valid = len(spec.test_indices) if (spec is not None and spec.test_indices) else None
             sizes = {"n": n, "n_train": n_train, "n_valid": n_valid}
         except Exception:
             pass

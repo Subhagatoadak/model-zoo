@@ -123,7 +123,7 @@ def bayes_linreg_train_and_infer(inputs: Dict[str, Any], params: Dict[str, Any],
     # Two cases: (A) known sigma; (B) Gamma prior on precision tau = 1/sigma^2
     pri_sigma = priors.get("sigma") if isinstance(priors, dict) else None
     posterior_info: Dict[str, Any] = {}
-    if isinstance(pri_sigma, dict) and (pri_sigma.get("distribution") or "").lower() == "gamma":
+    if isinstance(pri_sigma, dict) and (pri_sigma.get("distribution") or "").lower() in ("gamma", "erlang"):
         # Normal-Gamma prior: beta | tau ~ N(mu0, (tau*lambda0)^-1), tau ~ Gamma(a0, b0) (shape-rate)
         # Map prior_tau (std for beta under fixed sigma) to lambda0 by lambda0 = 1 / prior_tau^2
         mu0 = prior_mu
@@ -174,7 +174,7 @@ def bayes_linreg_train_and_infer(inputs: Dict[str, Any], params: Dict[str, Any],
         random.seed(12345)
         # Draw posterior samples
         samples = []
-        if isinstance(pri_sigma, dict) and (pri_sigma.get("distribution") or "").lower() == "gamma":
+        if isinstance(pri_sigma, dict) and (pri_sigma.get("distribution") or "").lower() in ("gamma", "erlang"):
             # Sample tau ~ Gamma(a_n, b_n), then beta | tau ~ N(mu_n, 1/(tau*lambda_n))
             a_n = posterior_info["posterior_tau_shape"]
             b_n = posterior_info["posterior_tau_rate"]

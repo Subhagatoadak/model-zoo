@@ -7,9 +7,9 @@ from model_zoo import (
     ModelRunRequest, MetricComputeRequest, EvaluationSpec,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
-from model_zoo.examples.models import make_synthetic_linear, make_synthetic_mtcars_wt_mpg
+from model_zoo.examples.models import make_synthetic_linear, make_synthetic_mtcars_wt_mpg, make_synthetic_mtcars_multi
 from model_zoo import r_style_summary_string
-from model_zoo.utils.logging import configure_logging, get_logger
+from model_zoo.utils.logging import configure_logging, get_logger, quiet_third_party_loggers
 from model_zoo.examples.sklearn_models import sk_lr_train_and_infer  # noqa: F401 (for binding importability)
 from model_zoo.examples.pymc_models import pymc_linear_nuts  # noqa: F401 (for binding importability)
 from model_zoo.examples import metrics as example_metrics
@@ -23,6 +23,7 @@ class PrintAudit(AuditLog):
 
 def main():
     configure_logging("INFO")
+    quiet_third_party_loggers()
     log = get_logger(__name__)
     log.info("Starting example run")
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
@@ -168,15 +169,24 @@ def main():
             }
         ),
     )
-    def wait_for_result(zoo_obj, run_id: str, actor: str = "you", max_tries: int = 100):
+    def wait_for_result(zoo_obj, run_id: str, actor: str = "you", timeout_s: float = 300.0):
         import time
-        res = None
-        for _ in range(max_tries):
+        start = time.monotonic()
+        sleep = 0.05
+        last = None
+        while True:
             res = zoo_obj.get_run_result(run_id, actor=actor)
+            last = res
+            # Break when terminal status or in_progress flag cleared
+            if res.status.name in ("SUCCEEDED", "FAILED", "CANCELLED"):
+                return res
             if not res.metadata.get("in_progress"):
                 return res
-            time.sleep(0.01)
-        return res
+            if time.monotonic() - start > timeout_s:
+                return res
+            time.sleep(sleep)
+            sleep = min(sleep * 1.5, 1.0)
+        return last
 
     try:
         lin_handle = zoo.submit_run(lin_req, actor="you")
@@ -405,6 +415,12 @@ def main():
         bound_id="pymc_linear_nuts_mtcars_v1", kind=BindingKind.LIBRARY,
         module="model_zoo.examples.pymc_models", callable="pymc_linear_nuts",
     )
+    # Custom per-feature priors for PyMC multivariate (match feature_names order)
+    beta_mu_map = {"wt": -4.0, "hp": -0.01, "disp": -0.005}
+    beta_tau_map = {"wt": 3.0, "hp": 0.05, "disp": 0.02}
+    beta_mu_list = [beta_mu_map.get(n, 0.0) for n in feat_names]
+    beta_tau_list = [beta_tau_map.get(n, 10.0) for n in feat_names]
+
     pymc_multi_req = ModelRunRequest(
         model_id="pymc_linear_nuts_mtcars_v1",
         inputs={"X": X_rows_ref, "y": y_m_ref},
@@ -412,10 +428,16 @@ def main():
             "draws": 300,
             "tune": 300,
             "target_accept": 0.9,
+            "chains": 2,
+            "cores": 1,
+            "compute_convergence_checks": True,
             "train_indices": tr_idx_mv,
             "feature_names": feat_names,
-            # scalar priors per-feature (shared), but can also pass lists matching feat_names
-            "priors": {"beta": {"mu": 0.0, "tau": 10.0}, "sigma": {"scale": 2.0}},
+            # Custom per-feature priors for beta (Normal) and sigma (Gamma/Erlang)
+            "priors": {
+                "beta": {"distribution": "normal", "mu": beta_mu_list, "tau": beta_tau_list},
+                "sigma": {"distribution": "erlang", "shape": 3.0, "rate": 2.0},
+            },
         },
         binding=pymc_multi_binding,
         context=ExecutionContext(random_seed=2025),
