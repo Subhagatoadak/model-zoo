@@ -141,23 +141,17 @@ def main():
     test_idx = list(range(split, n))
 
     # 10) Custom priors per feature
-    # Why: encodes domain expectations (e.g., positive TV elasticity) and stabilizes inference
-    # Example: different distributions per channel
-    # - tv: Normal prior around 2.0 (moderate effect), tau=1.0
-    # - radio: HalfNormal (non-negative effect), scale=1.0
-    # - social: Gamma/Erlang (strictly positive), shape=2.0, rate=1.0
     priors = {
-        "beta": {
-            "distribution": ["normal", "half_normal", "gamma"],
-            "mu": [2.0, None, None],           # used only for normal
-            "tau": [1.0, None, None],          # used only for normal
-            "scale": [None, 1.0, None],        # used only for half_normal
-            "shape": [None, None, 2.0],        # used only for gamma/erlang
-            "rate": [None, None, 1.0],
-        },
-        # Sigma prior: choose HalfNormal (scale) or Gamma/Erlang (shape, rate)
-        "sigma": {"distribution": "half_normal", "scale": 5.0},
-    }
+                "beta": {
+                "distribution": ["normal", "half_normal", "gamma"],
+                "mu": [2.0, None, None], # only used for normal
+                "tau": [1.0, None, None], # only used for normal
+                "scale": [None, 1.0, None], # only used for half_normal
+                "shape": [None, None, 2.0], # only used for gamma/erlang
+                "rate": [None, None, 1.0],
+                },
+                "sigma": {"distribution": "half_normal", "scale": 5.0}
+            }
 
     # 11) Build a run request with EvaluationSpec
     # Explain: EvaluationSpec asks the platform to compute metrics inline and return them in the summary
@@ -168,7 +162,7 @@ def main():
             "draws": 400,                # posterior samples to draw
             "tune": 400,                 # warmup for NUTS
             "target_accept": 0.9,        # robust proposals
-            "chains": 2, "cores": 1,    # deterministic(ish) in simple environments
+            "chains": 5, "cores": 1,    # deterministic(ish) in simple environments
             "compute_convergence_checks": True,
             "feature_names": feat_names,
             "priors": priors,
@@ -215,3 +209,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
