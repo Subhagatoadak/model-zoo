@@ -5,6 +5,7 @@ from model_zoo import (
     ExecutionBinding, BindingKind,
     DataRef, DataRefType, ExecutionContext,
     ModelRunRequest, MetricComputeRequest, EvaluationSpec,
+    InMemoryBindingRegistry, InMemoryRunStore,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo.examples.models import make_synthetic_linear, make_synthetic_mtcars_wt_mpg, make_synthetic_mtcars_multi
@@ -27,9 +28,13 @@ def main():
     log = get_logger(__name__)
     log.info("Starting example run")
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
+    # Configure runner with an in-memory store; attach binding registry to Zoo
+    model_runner = LibraryModelRunner()
+    model_runner.set_run_store(InMemoryRunStore())
+    bind_reg = InMemoryBindingRegistry()
     zoo = ModelZoo(model_reg, metric_reg,
-                   binding_registry=None,  # not needed; we pass binding on request in this demo
-                   model_runner=LibraryModelRunner(),
+                   binding_registry=bind_reg,
+                   model_runner=model_runner,
                    metric_runner=LibraryMetricRunner(),
                    validator=DefaultParamValidator(),
                    audit=PrintAudit())
@@ -148,6 +153,12 @@ def main():
         module="model_zoo.examples.metrics", callable="mse",
     )
 
+    # Register model and metric bindings in registry (so requests needn't carry them)
+    bind_reg.register_model_binding("linear_regression_v1", lin_binding)
+    bind_reg.register_model_binding("bayes_linear_v1", bayes_binding)
+    bind_reg.register_metric_binding("r2_v1", r2_binding)
+    bind_reg.register_metric_binding("mse_v1", mse_binding)
+
     # Run linear regression with training on train_idx and evaluate on test_idx
     lin_req = ModelRunRequest(
         model_id="linear_regression_v1",
@@ -155,7 +166,6 @@ def main():
         params={"fit_intercept": True, "train_indices": train_idx, "feature_name": "X"},
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic:v1",
-        binding=lin_binding,
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
             y_true_key="y",
@@ -214,7 +224,6 @@ def main():
         },
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic:v1",
-        binding=bayes_binding,
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
             y_true_key="y",
@@ -258,7 +267,6 @@ def main():
         },
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic:v1",
-        binding=bayes_binding,
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
             y_true_key="y",
@@ -307,6 +315,7 @@ def main():
         bound_id="bayes_mtcars_wt_v1", kind=BindingKind.LIBRARY,
         module="model_zoo.examples.models", callable="bayes_linreg_train_and_infer",
     )
+    bind_reg.register_model_binding("bayes_mtcars_wt_v1", mtcars_binding)
     mtcars_req = ModelRunRequest(
         model_id="bayes_mtcars_wt_v1",
         inputs={"X": wt_ref, "y": mpg_ref},
@@ -323,7 +332,6 @@ def main():
         },
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic_mtcars:v1",
-        binding=mtcars_binding,
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
             y_true_key="y",
@@ -415,6 +423,7 @@ def main():
         bound_id="pymc_linear_nuts_mtcars_v1", kind=BindingKind.LIBRARY,
         module="model_zoo.examples.pymc_models", callable="pymc_linear_nuts",
     )
+    bind_reg.register_model_binding("pymc_linear_nuts_mtcars_v1", pymc_multi_binding)
     # Custom per-feature priors for PyMC multivariate (match feature_names order)
     beta_mu_map = {"wt": -4.0, "hp": -0.01, "disp": -0.005}
     beta_tau_map = {"wt": 3.0, "hp": 0.05, "disp": 0.02}
@@ -439,7 +448,6 @@ def main():
                 "sigma": {"distribution": "erlang", "shape": 3.0, "rate": 2.0},
             },
         },
-        binding=pymc_multi_binding,
         context=ExecutionContext(random_seed=2025),
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
@@ -476,11 +484,11 @@ def main():
         bound_id="sklearn_linear_v1", kind=BindingKind.LIBRARY,
         module="model_zoo.examples.sklearn_models", callable="sk_lr_train_and_infer",
     )
+    bind_reg.register_model_binding("sklearn_linear_v1", sk_binding)
     sk_req = ModelRunRequest(
         model_id="sklearn_linear_v1",
         inputs={"X": X_ref, "y": y_ref},
         params={"fit_intercept": True, "train_indices": train_idx, "feature_names": ["X"]},
-        binding=sk_binding,
         context=ExecutionContext(random_seed=2025),
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],

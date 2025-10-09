@@ -58,36 +58,52 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
 
     priors = params.get("priors", {}) or {}
     beta_prior = priors.get("beta", {})
-    beta_dist = (beta_prior.get("distribution") or "normal").lower()
-    # Support scalar or per-feature vectors for mu and tau
     p = X_arr.shape[1]
-    mu_raw = beta_prior.get("mu", 0.0)
-    tau_raw = beta_prior.get("tau", 10.0)
-    if isinstance(mu_raw, list):
-        if len(mu_raw) != p: raise ValueError("beta.mu length must equal number of features")
-        beta_mu = np.array(mu_raw, dtype=float)
-    else:
-        beta_mu = float(mu_raw)
-    if isinstance(tau_raw, list):
-        if len(tau_raw) != p: raise ValueError("beta.tau length must equal number of features")
-        beta_tau = np.array(tau_raw, dtype=float)
-    else:
-        beta_tau = float(tau_raw)
+    beta_dist_raw = beta_prior.get("distribution", "normal")
+    # Helpers to extract possibly vectorized params
+    def _get_param(name: str, default: float, i: int) -> float:
+        val = beta_prior.get(name, None)
+        if isinstance(val, list):
+            if len(val) != p:
+                raise ValueError(f"beta.{name} length must equal number of features")
+            return float(val[i]) if val[i] is not None else float(default)
+        if val is None:
+            return float(default)
+        return float(val)
     sigma_prior = priors.get("sigma", {})
     sigma_dist = (sigma_prior.get("distribution") or "half_normal").lower()
     sigma_scale = float(sigma_prior.get("scale", 1.0))
 
     with pm.Model() as model:
         alpha = pm.Normal("alpha", mu=0.0, sigma=10.0)
-        # beta prior
-        if beta_dist not in ("normal",):
-            raise ValueError(f"Unsupported beta prior distribution: {beta_dist}")
-        if p == 1:
-            beta = pm.Normal("beta", mu=beta_mu, sigma=beta_tau)
-            mu = alpha + beta * X_train
-        else:
-            beta = pm.Normal("beta", mu=beta_mu, sigma=beta_tau, shape=p)
-            mu = alpha + pm.math.dot(X_train, beta)
+        # Build per-feature beta priors supporting different distributions
+        beta_vars = []
+        for i, name in enumerate(feature_names):
+            # distribution can be scalar or list; allow per-feature
+            if isinstance(beta_dist_raw, list):
+                if len(beta_dist_raw) != p:
+                    raise ValueError("beta.distribution length must equal number of features")
+                dist_i = str(beta_dist_raw[i]).lower()
+            else:
+                dist_i = str(beta_dist_raw).lower()
+            # sanitize name for PyMC RV
+            rv_name = f"beta_{name}".replace(" ", "_").replace("[", "_").replace("]", "_")
+            if dist_i in ("normal",):
+                mu_i = _get_param("mu", 0.0, i)
+                tau_i = _get_param("tau", 10.0, i)
+                beta_i = pm.Normal(rv_name, mu=mu_i, sigma=tau_i)
+            elif dist_i in ("half_normal", "halfnormal"):
+                scale_i = _get_param("scale", 1.0, i)
+                beta_i = pm.HalfNormal(rv_name, sigma=scale_i)
+            elif dist_i in ("gamma", "erlang"):
+                shape_i = _get_param("shape", 2.0, i)
+                rate_i = _get_param("rate", 1.0, i)
+                beta_i = pm.Gamma(rv_name, alpha=shape_i, beta=rate_i)
+            else:
+                raise ValueError(f"Unsupported beta prior distribution: {dist_i}")
+            beta_vars.append(beta_i)
+
+        beta_vec = pm.math.stack(beta_vars)
 
         # sigma prior
         if sigma_dist in ("half_normal", "halfnormal"):
@@ -99,6 +115,7 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
             sigma = pm.Gamma("sigma", alpha=shape, beta=rate)
         else:
             raise ValueError(f"Unsupported sigma prior distribution: {sigma_dist}")
+        mu = alpha + pm.math.dot(X_train, beta_vec)
         pm.Normal("y_obs", mu=mu, sigma=sigma, observed=y_train)
 
         idata = pm.sample(
@@ -115,11 +132,14 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
     # Posterior means
     import numpy as _np
     alpha_mean = float(idata.posterior["alpha"].values.mean())
-    beta_vals = idata.posterior["beta"].values
-    beta_mean_arr = _np.array(beta_vals).mean(axis=(0, 1))  # average over chain, draw
-    beta_mean = float(beta_mean_arr) if p == 1 else beta_mean_arr.reshape(-1)
+    # Extract per-feature posterior means by variable name
+    beta_means: List[float] = []
+    for name in feature_names:
+        rv_name = f"beta_{name}".replace(" ", "_").replace("[", "_").replace("]", "_")
+        beta_means.append(float(idata.posterior[rv_name].values.mean()))
 
-    y_pred = (alpha_mean + (X_arr * beta_mean if p == 1 else X_arr.dot(beta_mean))).tolist()
+    beta_mean_vec = _np.array(beta_means)
+    y_pred = (alpha_mean + X_arr.dot(beta_mean_vec)).tolist()
 
     diagnostics: Dict[str, Any] = {
         "alpha": alpha_mean,
@@ -129,12 +149,8 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
         "chains": chains,
     }
     # add named coefficients
-    if p == 1:
-        name = feature_names[0]
-        diagnostics[f"coef[{name}]"] = float(beta_mean)
-    else:
-        for i, name in enumerate(feature_names):
-            diagnostics[f"coef[{name}]"] = float(beta_mean[i])
+    for i, name in enumerate(feature_names):
+        diagnostics[f"coef[{name}]"] = float(beta_mean_vec[i])
 
     return {
         "predictions": y_pred,
@@ -142,6 +158,6 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
         "metadata": {
             "model": "pymc_linear_nuts",
             "feature_names": feature_names,
-            "priors": {"beta": {"distribution": beta_dist}, "sigma": {"distribution": sigma_dist}},
+            "priors": {"beta": {"distribution": beta_dist_raw}, "sigma": {"distribution": sigma_dist}},
         },
     }
