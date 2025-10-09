@@ -4,7 +4,7 @@ from model_zoo import (
     HyperParamSpace, HyperParamField, DType,
     ExecutionBinding, BindingKind,
     DataRef, DataRefType, ExecutionContext,
-    ModelRunRequest, MetricComputeRequest,
+    ModelRunRequest, MetricComputeRequest, EvaluationSpec,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo.examples.models import make_synthetic_linear
@@ -99,6 +99,11 @@ def main():
     X, y = make_synthetic_linear(n=100, slope=2.0, intercept=1.0, noise_sigma=0.5)
     X_ref = DataRef(ref_type=DataRefType.INLINE, inline=X)
     y_ref = DataRef(ref_type=DataRefType.INLINE, inline=y)
+    # Train/test split indices (80/20)
+    n = len(X)
+    split = int(0.8 * n)
+    train_idx = list(range(0, split))
+    test_idx = list(range(split, n))
 
     # Bindings to example in-process callables
     lin_binding = ExecutionBinding(
@@ -120,14 +125,23 @@ def main():
         module="model_zoo.examples.metrics", callable="mse",
     )
 
-    # Run linear regression
+    # Run linear regression with training on train_idx and evaluate on test_idx
     lin_req = ModelRunRequest(
         model_id="linear_regression_v1",
         inputs={"X": X_ref, "y": y_ref},
-        params={"fit_intercept": True},
+        params={"fit_intercept": True, "train_indices": train_idx},
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic:v1",
         binding=lin_binding,
+        evaluation=EvaluationSpec(
+            metric_ids=["r2_v1", "mse_v1"],
+            y_true_key="y",
+            test_indices=test_idx,
+            bindings={
+                "r2_v1": r2_binding,
+                "mse_v1": mse_binding,
+            }
+        ),
     )
     def wait_for_result(zoo_obj, run_id: str, actor: str = "you", max_tries: int = 100):
         import time
@@ -142,71 +156,31 @@ def main():
     lin_handle = zoo.submit_run(lin_req, actor="you")
     lin_res = wait_for_result(zoo, lin_handle.run_id, actor="you")
     print("LinearRegression: status=", lin_res.status.value, "coefficients=", lin_res.diagnostics)
+    # Metrics computed automatically based on evaluation spec
+    print("LinearRegression metrics:", lin_res.eval_scores)
 
-    # Compute evaluation metrics separately using MetricRunner
-    lin_r2_req = MetricComputeRequest(
-        metric_id="r2_v1",
-        direction=MetricDirection.HIGHER_IS_BETTER.value,
-        y_true=y_ref,
-        y_pred=lin_res.predictions,
-        binding=r2_binding,
-    )
-    lin_mse_req = MetricComputeRequest(
-        metric_id="mse_v1",
-        direction=MetricDirection.LOWER_IS_BETTER.value,
-        y_true=y_ref,
-        y_pred=lin_res.predictions,
-        binding=mse_binding,
-    )
-    # Or compute all registered metrics in one call
-    lin_metrics = zoo.compute_all_metrics(
-        y_true=y_ref,
-        y_pred=lin_res.predictions,
-        bindings={
-            "r2_v1": r2_binding,
-            "mse_v1": mse_binding,
-        },
-        actor="you",
-    )
-    print("LinearRegression metrics:", {k: v.score for k, v in lin_metrics.items()})
-
-    # Switch to Bayesian linear regression (just swap model_id + binding + params)
+    # Switch to Bayesian linear regression (swap model_id + binding + params) with same split
     bayes_req = ModelRunRequest(
         model_id="bayes_linear_v1",
         inputs={"X": X_ref, "y": y_ref},
-        params={"sigma": 0.5, "prior_tau": 5.0, "fit_intercept": True},
+        params={"sigma": 0.5, "prior_tau": 5.0, "fit_intercept": True, "train_indices": train_idx},
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic:v1",
         binding=bayes_binding,
+        evaluation=EvaluationSpec(
+            metric_ids=["r2_v1", "mse_v1"],
+            y_true_key="y",
+            test_indices=test_idx,
+            bindings={
+                "r2_v1": r2_binding,
+                "mse_v1": mse_binding,
+            }
+        ),
     )
     bayes_handle = zoo.submit_run(bayes_req, actor="you")
     bayes_res = wait_for_result(zoo, bayes_handle.run_id, actor="you")
     print("BayesLinear: status=", bayes_res.status.value, "params=", bayes_res.diagnostics)
-
-    bayes_r2_req = MetricComputeRequest(
-        metric_id="r2_v1",
-        direction=MetricDirection.HIGHER_IS_BETTER.value,
-        y_true=y_ref,
-        y_pred=bayes_res.predictions,
-        binding=r2_binding,
-    )
-    bayes_mse_req = MetricComputeRequest(
-        metric_id="mse_v1",
-        direction=MetricDirection.LOWER_IS_BETTER.value,
-        y_true=y_ref,
-        y_pred=bayes_res.predictions,
-        binding=mse_binding,
-    )
-    bayes_metrics = zoo.compute_all_metrics(
-        y_true=y_ref,
-        y_pred=bayes_res.predictions,
-        bindings={
-            "r2_v1": r2_binding,
-            "mse_v1": mse_binding,
-        },
-        actor="you",
-    )
-    print("BayesLinear metrics:", {k: v.score for k, v in bayes_metrics.items()})
+    print("BayesLinear metrics:", bayes_res.eval_scores)
 
 if __name__ == "__main__":
     main()

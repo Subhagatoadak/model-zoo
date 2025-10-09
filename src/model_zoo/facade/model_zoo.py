@@ -7,7 +7,7 @@ from ..contracts.validation import ParamValidationService
 from ..contracts.audit import AuditLog, AuditEvent
 from ..contracts.run_requests import (
     ModelRunRequest, ModelRunHandle, ModelRunResult,
-    MetricComputeRequest, MetricComputeResult
+    MetricComputeRequest, MetricComputeResult, EvaluationSpec
 )
 from ..runners.base import ModelRunner, MetricRunner
 
@@ -20,6 +20,7 @@ class ModelZoo:
     validator: ParamValidationService
     audit: Optional[AuditLog] = None
     binding_registry: Optional[Any] = None  # optional external binding store
+    _eval_specs: Dict[str, Dict[str, Any]] = None  # internal: run_id -> {spec, y_true_ref}
 
     # registries
     def register_model(self, spec: ModelSpec, actor: str = "system") -> None:
@@ -42,11 +43,68 @@ class ModelZoo:
         self.validator.validate_model_params(spec, req.params)
         # If a binding registry exists, attach binding here (kept outside registries)
         self._audit("RUN_SUBMIT", actor, req.model_id, req.to_dict())
-        return self.model_runner.submit(req)
+        handle = self.model_runner.submit(req)
+        # Initialize eval spec store
+        if self._eval_specs is None:
+            self._eval_specs = {}
+        if req.evaluation is not None:
+            y_key = req.evaluation.y_true_key
+            y_ref = req.inputs.get(y_key)
+            self._eval_specs[handle.run_id] = {"spec": req.evaluation, "y_true": y_ref}
+        return handle
 
     def get_run_result(self, run_id: str, actor: str = "system") -> ModelRunResult:
         res = self.model_runner.result(run_id)
         self._audit("RUN_RESULT", actor, run_id, {"status": res.status.value})
+        # Inline evaluation if an evaluation spec exists for this run and predictions are available
+        if getattr(self, "_eval_specs", None) and run_id in self._eval_specs:
+            plan = self._eval_specs[run_id]
+            spec: EvaluationSpec = plan["spec"]
+            y_true_ref = plan.get("y_true")
+            if res.status.name == "SUCCEEDED" and res.predictions is not None and y_true_ref is not None:
+                # Only compute if not already computed
+                if not res.eval_scores:
+                    try:
+                        # Prefer inline lists for demo evaluation
+                        if y_true_ref.ref_type.name == "INLINE" and res.predictions.ref_type.name == "INLINE":
+                            yt = y_true_ref
+                            yp = res.predictions
+                            # Apply test indices if provided
+                            if spec.test_indices:
+                                try:
+                                    ytv = [yt.inline[i] for i in spec.test_indices]
+                                    ypv = [yp.inline[i] for i in spec.test_indices]
+                                    from ..contracts.io import DataRef, DataRefType
+                                    yt = DataRef(ref_type=DataRefType.INLINE, inline=ytv)
+                                    yp = DataRef(ref_type=DataRefType.INLINE, inline=ypv)
+                                except Exception:
+                                    pass
+                            # Prepare bindings
+                            bindings = spec.bindings or {}
+                            # Fallback to binding registry if present
+                            if not bindings and self.binding_registry is not None:
+                                try:
+                                    bindings = {mid: self.binding_registry.get_metric_binding(mid) for mid in spec.metric_ids}
+                                except Exception:
+                                    bindings = {}
+                            # Compute metrics
+                            results: Dict[str, MetricComputeResult] = {}
+                            for mid in spec.metric_ids:
+                                b = bindings.get(mid)
+                                if b is None:
+                                    continue
+                                mc_req = MetricComputeRequest(
+                                    metric_id=mid,
+                                    direction=self.metric_registry.get(mid).direction.value,
+                                    y_true=yt,
+                                    y_pred=yp,
+                                    binding=b,
+                                )
+                                mres = self.metric_runner.compute(mc_req)
+                                results[mid] = mres
+                            res.eval_scores = {k: v.score for k, v in results.items()}
+                    except Exception:
+                        pass
         return res
 
     def compute_metric(self, req: MetricComputeRequest, actor: str = "system") -> MetricComputeResult:

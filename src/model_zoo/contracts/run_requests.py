@@ -1,8 +1,25 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from enum import Enum
 from .io import DataRef, SecretRef, ExecutionContext
+
+@dataclass
+class EvaluationSpec:
+    metric_ids: List[str]
+    y_true_key: str = "y"
+    y_pred_source: str = "predictions"
+    test_indices: Optional[List[int]] = None
+    bindings: Dict[str, Any] = field(default_factory=dict)  # metric_id -> ExecutionBinding
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "metric_ids": self.metric_ids,
+            "y_true_key": self.y_true_key,
+            "y_pred_source": self.y_pred_source,
+            "test_indices": self.test_indices,
+            "bindings": {k: (None if v is None else v.to_dict()) for k, v in self.bindings.items()},
+        }
 
 class RunStatus(Enum):
     QUEUED = "queued"
@@ -20,6 +37,7 @@ class ModelRunRequest:
     dataset_version: Optional[str] = None
     secrets: list[SecretRef] = field(default_factory=list)
     binding: Optional[Any] = None  # ExecutionBinding (kept outside registries)
+    evaluation: Optional[EvaluationSpec] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -31,6 +49,7 @@ class ModelRunRequest:
             "dataset_version": self.dataset_version,
             "secrets": [vars(s) for s in self.secrets],
             "binding": None if self.binding is None else self.binding.to_dict(),
+            "evaluation": None if self.evaluation is None else self.evaluation.to_dict(),
         }
 
 @dataclass
@@ -48,6 +67,7 @@ class ModelRunResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
+    eval_scores: Dict[str, float] = field(default_factory=dict)
 
 @dataclass
 class MetricComputeRequest:

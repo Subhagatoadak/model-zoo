@@ -32,15 +32,23 @@ def linreg_train_and_infer(inputs: Dict[str, Any], params: Dict[str, Any], conte
     if not X or not y or len(X) != len(y):
         raise ValueError("linreg: inputs must provide 'X' and 'y' of same non-zero length")
 
+    # Optional: train on subset of indices if provided
+    train_idx = params.get("train_indices")
+    if train_idx is not None:
+        X_train = [X[i] for i in train_idx]
+        y_train = [y[i] for i in train_idx]
+    else:
+        X_train, y_train = X, y
+
     if fit_intercept:
         # OLS with intercept via covariance/variance
-        beta = _cov(X, y) / (_var(X) + 1e-12)
-        alpha = _mean(y) - beta * _mean(X)
+        beta = _cov(X_train, y_train) / (_var(X_train) + 1e-12)
+        alpha = _mean(y_train) - beta * _mean(X_train)
     else:
         # Force intercept to 0
         # beta = (X^T y) / (X^T X)
-        num = sum(X[i] * y[i] for i in range(len(X)))
-        den = sum(x * x for x in X) + 1e-12
+        num = sum(X_train[i] * y_train[i] for i in range(len(X_train)))
+        den = sum(x * x for x in X_train) + 1e-12
         beta, alpha = num / den, 0.0
 
     y_pred = [alpha + beta * x for x in X]
@@ -77,11 +85,19 @@ def bayes_linreg_train_and_infer(inputs: Dict[str, Any], params: Dict[str, Any],
     if sigma <= 0 or prior_tau <= 0:
         raise ValueError("'sigma' and 'prior_tau' must be positive")
 
-    n = len(X)
-    mx, my = _mean(X), _mean(y)
+    # Optional: train on subset of indices
+    train_idx = params.get("train_indices")
+    if train_idx is not None:
+        X_train = [X[i] for i in train_idx]
+        y_train = [y[i] for i in train_idx]
+    else:
+        X_train, y_train = X, y
+
+    n = len(X_train)
+    mx, my = _mean(X_train), _mean(y_train)
     # Center if intercept included
-    Xc = [x - mx for x in X] if fit_intercept else X
-    yc = [yi - my for yi in y] if fit_intercept else y
+    Xc = [x - mx for x in X_train] if fit_intercept else X_train
+    yc = [yi - my for yi in y_train] if fit_intercept else y_train
 
     sxx = sum(x * x for x in Xc)
     sxy = sum(Xc[i] * yc[i] for i in range(n))

@@ -11,7 +11,7 @@ from .registry.metrics import EvalMetricSpec, MetricRegistry, MetricDirection, M
 # Contracts
 from .contracts.io import DataRef, DataRefType, SecretRef, ExecutionContext
 from .contracts.run_requests import (
-    ModelRunRequest, ModelRunResult, MetricComputeRequest, MetricComputeResult, RunStatus, ModelRunHandle
+    ModelRunRequest, ModelRunResult, MetricComputeRequest, MetricComputeResult, RunStatus, ModelRunHandle, EvaluationSpec
 )
 from .contracts.capability import ModelCapability, MetricRequirement
 from .contracts.validation import ParamValidationService
