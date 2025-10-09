@@ -1,4 +1,9 @@
 from __future__ import annotations
+"""Sklearn LinearRegression runner callables (in‑process).
+
+Converts flexible input formats to numpy arrays, trains on an optional subset,
+and returns predictions and named coefficients (coef[feature]).
+"""
 from typing import Any, Dict, List
 from ..utils.logging import get_logger
 

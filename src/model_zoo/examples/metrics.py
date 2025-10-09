@@ -1,4 +1,5 @@
 from __future__ import annotations
+"""Example metric callables for in‑process evaluation via LibraryMetricRunner."""
 from typing import Iterable, Optional, Dict, Any
 
 
@@ -35,4 +36,3 @@ def mae(y_true, y_pred=None, proba=None, samples=None, params=None, extra=None) 
         raise ValueError("mae: y_true and y_pred must be same non-zero length")
     err = [abs(yi - yhat) for yi, yhat in zip(yt, yp)]
     return sum(err) / len(err)
-

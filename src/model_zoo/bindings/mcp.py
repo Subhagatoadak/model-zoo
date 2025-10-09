@@ -1,9 +1,16 @@
 from __future__ import annotations
+"""Options for invoking models via Model Context Protocol (MCP)."""
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 @dataclass
 class MCPBindingOptions:
+    """Connection + invocation options for MCP bindings.
+
+    Depending on the transport, either `command` (stdio) or `endpoint`
+    (streamable_http) is required. Additional metadata such as headers, tool
+    name, and protocol version can be provided.
+    """
     transport: str                     # "stdio" | "streamable_http"
     endpoint: Optional[str] = None
     command: Optional[str] = None

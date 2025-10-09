@@ -1,4 +1,11 @@
 from __future__ import annotations
+"""Dependency‑free example models and synthetic data generators.
+
+Includes:
+- Simple OLS linear regression
+- Conjugate Bayesian linear regression (Normal / Normal‑Gamma)
+- Synthetic data generators for linear and mtcars‑like tasks
+"""
 from typing import Dict, Any, List, Tuple
 import math
 

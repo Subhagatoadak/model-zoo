@@ -1,4 +1,10 @@
 from __future__ import annotations
+"""HTTP-based runners (submit/compute via API endpoints).
+
+These are conventional implementations: submit via POST, then poll or fetch
+results via GET endpoints. Integrate with a BindingRegistry to manage
+endpoints per model/metric.
+"""
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -36,10 +42,11 @@ class HttpModelRunner(ModelRunner):
     """
 
     def __init__(self, http_client: Optional[Any] = None) -> None:
-        # http_client should be API-compatible with requests (session) if provided
+        """Create a runner with an optional requests-like client session."""
         self._http = http_client
 
     def submit(self, req: ModelRunRequest) -> ModelRunHandle:
+        """POST the run request to `binding.endpoint` and return a handle."""
         binding = self._require_http_binding(req.binding)
         session = self._session()
         resp = session.post(binding.endpoint, json=req.to_dict())
@@ -69,6 +76,7 @@ class HttpModelRunner(ModelRunner):
         return binding
 
     def _session(self):
+        """Return an HTTP session (requests.Session)."""
         if self._http is not None:
             return self._http
         try:
@@ -86,9 +94,11 @@ class HttpMetricRunner(MetricRunner):
     """
 
     def __init__(self, http_client: Optional[Any] = None) -> None:
+        """Create a metric runner with an optional requests-like session."""
         self._http = http_client
 
     def compute(self, req: MetricComputeRequest) -> MetricComputeResult:
+        """POST the metric request and parse a score/artifacts/metadata response."""
         binding = self._require_http_binding(req.binding)
         session = self._session()
         resp = session.post(binding.endpoint, json=req.to_dict())
@@ -113,6 +123,7 @@ class HttpMetricRunner(MetricRunner):
         return binding
 
     def _session(self):
+        """Return an HTTP session (requests.Session)."""
         if self._http is not None:
             return self._http
         try:

@@ -1,4 +1,9 @@
 from __future__ import annotations
+"""In‑process runner implementations that invoke Python callables.
+
+Supports concurrency limits, timeouts, retries with backoff, cooperative
+cancellation, run persistence, and event-friendly logging metadata.
+"""
 from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone

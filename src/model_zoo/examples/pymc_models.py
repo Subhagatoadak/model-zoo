@@ -1,4 +1,10 @@
 from __future__ import annotations
+"""PyMC model callables for in‑process execution via the Library runner.
+
+Contains:
+- `pymc_linear_nuts`: linear regression with per‑feature priors and NUTS sampling
+- `pymc_hierarchical_mmm`: hierarchical MMM with geo/brand random intercepts
+"""
 from typing import Any, Dict, List
 
 

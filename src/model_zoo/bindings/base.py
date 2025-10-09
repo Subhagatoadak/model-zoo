@@ -1,9 +1,17 @@
 from __future__ import annotations
+"""Binding primitives that describe how to execute models and metrics.
+
+Bindings are kept separate from registries and attached at request time (or
+resolved via a BindingRegistry). They encode transport details such as
+module/callable for in‑process execution, HTTP endpoints, pipeline IDs, or MCP
+options.
+"""
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 from enum import Enum
 
 class BindingKind(Enum):
+    """Mechanism by which a binding executes."""
     API = "api"
     LIBRARY = "library"
     PIPELINE = "pipeline"
@@ -11,6 +19,12 @@ class BindingKind(Enum):
 
 @dataclass
 class ExecutionBinding:
+    """Concrete description of how to execute a model/metric.
+
+    Fields are optional depending on `kind`. For example, LIBRARY bindings use
+    `module` + `callable`; API bindings use `endpoint` + `method`; MCP bindings
+    attach options describing transport and tool invocation.
+    """
     bound_id: str
     kind: BindingKind
     endpoint: Optional[str] = None
@@ -23,6 +37,7 @@ class ExecutionBinding:
     mcp: Optional[Any] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize to a JSON‑serializable dictionary for logs/APIs."""
         return {
             "bound_id": self.bound_id, "kind": self.kind.value,
             "endpoint": self.endpoint, "method": self.method,

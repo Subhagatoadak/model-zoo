@@ -1,1 +1,1 @@
-# Project-wide typing helpers go here.
+"""Project-wide typing helpers and type aliases (placeholder)."""

@@ -1,9 +1,11 @@
 from __future__ import annotations
+"""Hyperparameter schema primitives used by registries and validators."""
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from enum import Enum
 
 class DType(Enum):
+    """JSON‑schema compatible base types used in HyperParamField."""
     INT = "int"
     FLOAT = "number"
     BOOL = "boolean"
@@ -14,6 +16,7 @@ class DType(Enum):
 
 @dataclass
 class HyperParamField:
+    """A single hyperparameter definition with validation hints."""
     name: str
     dtype: DType
     required: bool = False
@@ -28,6 +31,7 @@ class HyperParamField:
     example: Optional[Any] = None
 
     def to_json_schema(self) -> Dict[str, Any]:
+        """Serialize field into a minimal JSON Schema fragment."""
         schema: Dict[str, Any] = {
             "title": self.name, "description": self.description, "type": self.dtype.value
         }
@@ -41,9 +45,11 @@ class HyperParamField:
 
 @dataclass
 class HyperParamSpace:
+    """A collection of hyperparameters (name -> HyperParamField)."""
     fields: Dict[str, HyperParamField] = field(default_factory=dict)
 
     def to_json_schema(self) -> Dict[str, Any]:
+        """Serialize the space into a minimal JSON Schema object."""
         properties = {n: f.to_json_schema() for n, f in self.fields.items()}
         required = [n for n, f in self.fields.items() if f.required]
         return {"type": "object", "properties": properties, "required": required, "additionalProperties": True}

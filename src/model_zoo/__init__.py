@@ -1,3 +1,8 @@
+"""Top-level package exports for the Model Zoo.
+
+Importing from here provides convenient access to facade, registries, contracts,
+bindings, runners, selection, IO, stores, and utilities.
+"""
 from .__about__ import __version__
 
 # Facade

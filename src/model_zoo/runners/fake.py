@@ -1,4 +1,5 @@
 from __future__ import annotations
+"""Minimal fake runners for demos/tests (synchronous completion)."""
 from datetime import datetime, timezone
 from ..contracts.run_requests import (
     ModelRunRequest, ModelRunHandle, ModelRunResult, RunStatus,
@@ -7,6 +8,7 @@ from ..contracts.run_requests import (
 from ..contracts.io import DataRef, DataRefType
 
 class FakeModelRunner:
+    """Fake model runner that returns a completed result immediately."""
     def __init__(self) -> None:
         self._store = {}
 
@@ -32,5 +34,6 @@ class FakeModelRunner:
         return
 
 class FakeMetricRunner:
+    """Fake metric runner that returns a constant score."""
     def compute(self, req: MetricComputeRequest) -> MetricComputeResult:
         return MetricComputeResult(score=0.0, metadata={"demo": True})

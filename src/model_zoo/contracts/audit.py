@@ -1,10 +1,12 @@
 from __future__ import annotations
+"""Audit event contracts for recording important lifecycle events."""
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 from abc import ABC, abstractmethod
 
 @dataclass
 class AuditEvent:
+    """Structured audit event used by the `AuditLog` interface."""
     kind: str
     who: str
     when: str
@@ -12,5 +14,8 @@ class AuditEvent:
     payload: Dict[str, Any] = field(default_factory=dict)
 
 class AuditLog(ABC):
+    """Abstract audit sink (append‑only)."""
     @abstractmethod
-    def append(self, event: AuditEvent) -> None: ...
+    def append(self, event: AuditEvent) -> None:
+        """Persist an audit event (best‑effort)."""
+        ...
