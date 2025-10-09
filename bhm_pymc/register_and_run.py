@@ -11,11 +11,8 @@ from model_zoo.examples.models import make_synthetic_linear
 from model_zoo import r_style_summary_string
 from model_zoo.examples import metrics as example_metrics
 from model_zoo.contracts.validation import ParamValidationService
+from model_zoo import DefaultParamValidator
 from model_zoo.contracts.audit import AuditLog, AuditEvent
-
-class NoOpValidator(ParamValidationService):
-    def validate_model_params(self, model_spec, params): return None
-    def validate_metric_params(self, metric_spec, params): return None
 
 class PrintAudit(AuditLog):
     def append(self, event: AuditEvent) -> None:
@@ -27,7 +24,7 @@ def main():
                    binding_registry=None,  # not needed; we pass binding on request in this demo
                    model_runner=LibraryModelRunner(),
                    metric_runner=LibraryMetricRunner(),
-                   validator=NoOpValidator(),
+                   validator=DefaultParamValidator(),
                    audit=PrintAudit())
     
 

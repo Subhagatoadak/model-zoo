@@ -15,6 +15,7 @@ from .contracts.run_requests import (
 )
 from .contracts.capability import ModelCapability, MetricRequirement
 from .contracts.validation import ParamValidationService
+from .contracts.validators import DefaultParamValidator
 from .contracts.audit import AuditLog, AuditEvent
 
 # Bindings & Runners
