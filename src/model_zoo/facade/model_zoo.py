@@ -117,10 +117,11 @@ class ModelZoo:
 
     def _build_r_style_summary(self, run_id: str, res: ModelRunResult, spec: EvaluationSpec, y_true_ref: Any) -> Dict[str, Any]:
         # Minimal R-like summary with sections: Call, Residuals summary, Coefficients, Fit stats, Metrics
+        # Prefer explicit call info if runner provided; fall back to binding
         call = {}
         try:
-            # best effort: reflect binding info from metadata if runner recorded it
-            call = res.metadata.get("binding", {})
+            meta = res.metadata if isinstance(res.metadata, dict) else {}
+            call = meta.get("call") or meta.get("binding", {})
         except Exception:
             call = {}
 

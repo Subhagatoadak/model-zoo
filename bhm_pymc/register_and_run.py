@@ -8,6 +8,7 @@ from model_zoo import (
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo.examples.models import make_synthetic_linear
+from model_zoo import r_style_summary_string
 from model_zoo.examples import metrics as example_metrics
 from model_zoo.contracts.validation import ParamValidationService
 from model_zoo.contracts.audit import AuditLog, AuditEvent
@@ -39,9 +40,27 @@ def main():
     bayes_hp = HyperParamSpace(fields={
         "sigma": HyperParamField("sigma", DType.FLOAT, default=0.5, required=True,
                                   description="Observation noise std"),
+        "prior_mu": HyperParamField("prior_mu", DType.FLOAT, default=0.0, required=False,
+                                     description="Prior mean for slope"),
         "prior_tau": HyperParamField("prior_tau", DType.FLOAT, default=10.0, required=False,
                                       description="Prior std for slope"),
         "fit_intercept": HyperParamField("fit_intercept", DType.BOOL, default=True, required=False),
+        "draws": HyperParamField("draws", DType.INT, default=0, required=False,
+                                  description="Number of posterior samples to draw for diagnostics"),
+        "tune": HyperParamField("tune", DType.INT, default=0, required=False,
+                                 description="Tuning steps (ignored in conjugate demo)"),
+        "priors": HyperParamField(
+            "priors", DType.DICT, default=None, required=False,
+            description=(
+                "Structured priors override. Example: "
+                "{'beta': {'distribution': 'normal', 'mu': 0.0, 'tau': 5.0}, "
+                " 'sigma': {'distribution': 'gamma', 'shape': 2.0, 'rate': 1.0}}"
+            ),
+            example={
+                "beta": {"distribution": "normal", "mu": 0.0, "tau": 5.0},
+                "sigma": {"distribution": "gamma", "shape": 2.0, "rate": 1.0},
+            },
+        ),
     })
 
     lin_spec = ModelSpec(
@@ -159,19 +178,22 @@ def main():
     lin_handle = zoo.submit_run(lin_req, actor="you")
     lin_res = wait_for_result(zoo, lin_handle.run_id, actor="you")
     print("LinearRegression: status=", lin_res.status.value)
-    print("LinearRegression summary:")
-    print("  Call:", lin_res.summary.get("Call"))
-    print("  Coefficients:", lin_res.summary.get("Coefficients"))
-    print("  Fit:", lin_res.summary.get("Fit"))
-    print("  Sizes:", lin_res.summary.get("Sizes"))
-    print("  Metrics (train):", lin_res.summary.get("Metrics", {}).get("train"))
-    print("  Metrics (validation):", lin_res.summary.get("Metrics", {}).get("validation"))
+    print(r_style_summary_string(lin_res.summary))
 
     # Switch to Bayesian linear regression (swap model_id + binding + params) with same split
     bayes_req = ModelRunRequest(
         model_id="bayes_linear_v1",
         inputs={"X": X_ref, "y": y_ref},
-        params={"sigma": 0.5, "prior_tau": 5.0, "fit_intercept": True, "train_indices": train_idx},
+        params={
+            "sigma": 0.5,
+            "prior_mu": 0.0,
+            "prior_tau": 5.0,
+            "fit_intercept": True,
+            "train_indices": train_idx,
+            "draws": 200,
+            "tune": 100,
+            "priors": {"beta": {"mu": 0.0, "tau": 5.0}},
+        },
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic:v1",
         binding=bayes_binding,
@@ -191,13 +213,46 @@ def main():
     bayes_handle = zoo.submit_run(bayes_req, actor="you")
     bayes_res = wait_for_result(zoo, bayes_handle.run_id, actor="you")
     print("BayesLinear: status=", bayes_res.status.value)
-    print("BayesLinear summary:")
-    print("  Call:", bayes_res.summary.get("Call"))
-    print("  Coefficients:", bayes_res.summary.get("Coefficients"))
-    print("  Fit:", bayes_res.summary.get("Fit"))
-    print("  Sizes:", bayes_res.summary.get("Sizes"))
-    print("  Metrics (train):", bayes_res.summary.get("Metrics", {}).get("train"))
-    print("  Metrics (validation):", bayes_res.summary.get("Metrics", {}).get("validation"))
+    print(r_style_summary_string(bayes_res.summary))
+
+    # Run Bayesian model again showing explicit priors configuration in hyperparameters
+    # This time include a Gamma prior on sigma (precision conjugacy via Normal-Gamma)
+    custom_priors = {
+        "beta": {"distribution": "normal", "mu": 0.5, "tau": 2.0},
+        "sigma": {"distribution": "gamma", "shape": 3.0, "rate": 2.0},
+    }
+    bayes_req_custom = ModelRunRequest(
+        model_id="bayes_linear_v1",
+        inputs={"X": X_ref, "y": y_ref},
+        params={
+            "sigma": 0.5,
+            "prior_mu": 0.0,      # can be omitted when using 'priors'
+            "prior_tau": 10.0,    # can be omitted when using 'priors'
+            "fit_intercept": True,
+            "train_indices": train_idx,
+            "draws": 100,
+            "priors": custom_priors,
+        },
+        context=ExecutionContext(random_seed=2025),
+        dataset_version="synthetic:v1",
+        binding=bayes_binding,
+        evaluation=EvaluationSpec(
+            metric_ids=["r2_v1", "mse_v1"],
+            y_true_key="y",
+            compute_train=True,
+            compute_valid=True,
+            train_indices=train_idx,
+            test_indices=test_idx,
+            bindings={
+                "r2_v1": r2_binding,
+                "mse_v1": mse_binding,
+            }
+        ),
+    )
+    bayes_handle2 = zoo.submit_run(bayes_req_custom, actor="you")
+    bayes_res2 = wait_for_result(zoo, bayes_handle2.run_id, actor="you")
+    print("BayesLinear (custom priors): status=", bayes_res2.status.value)
+    print(r_style_summary_string(bayes_res2.summary))
 
 if __name__ == "__main__":
     main()

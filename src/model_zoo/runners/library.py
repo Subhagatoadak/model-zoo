@@ -148,6 +148,23 @@ class LibraryModelRunner(ModelRunner):
                     ended_at=_now_iso(),
                 )
 
+            # Enrich metadata with binding + call info and params
+            try:
+                meta_extra = {
+                    "binding": binding.to_dict(),
+                    "call": {
+                        "module": binding.module,
+                        "callable": binding.callable,
+                        "params": req.params,
+                    },
+                }
+                if isinstance(result.metadata, dict):
+                    result.metadata.update(meta_extra)
+                else:
+                    result.metadata = meta_extra
+            except Exception:
+                pass
+
             # Success path
             job.status = result.status
             job.result = result

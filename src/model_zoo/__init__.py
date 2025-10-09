@@ -21,5 +21,6 @@ from .contracts.audit import AuditLog, AuditEvent
 from .bindings.base import BindingKind, ExecutionBinding
 from .bindings.mcp import MCPBindingOptions
 from .runners.base import ModelRunner, MetricRunner
+from .utils.summary import r_style_summary_string
 
 __all__ = [n for n in dir() if not n.startswith("_")]
