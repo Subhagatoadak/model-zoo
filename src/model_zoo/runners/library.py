@@ -17,6 +17,7 @@ from ..contracts.run_requests import (
     MetricComputeResult,
     RunStatus,
 )
+from ..utils.logging import get_logger
 
 
 def _default_load(ref: DataRef) -> Any:
@@ -68,10 +69,12 @@ class LibraryModelRunner(ModelRunner):
         self._jobs: Dict[str, _Job] = {}
         self._lock = Lock()
         self._load = data_loader or _default_load
+        self._log = get_logger(__name__)
 
     def submit(self, req: ModelRunRequest) -> ModelRunHandle:
         binding = self._require_library_binding(req.binding)
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}"
+        self._log.info("Submitting library run", extra={"run_id": run_id, "bind_module": binding.module, "bind_callable": binding.callable})
         job = _Job(req=req, status=RunStatus.STARTED, started_at=_now_iso())
         with self._lock:
             self._jobs[run_id] = job
@@ -170,6 +173,7 @@ class LibraryModelRunner(ModelRunner):
             job.result = result
             if not job.ended_at:
                 job.ended_at = _now_iso()
+            self._log.info("Library run finished", extra={"run_id": run_id, "status": job.status.value})
         except Exception as e:
             job.status = RunStatus.FAILED if not job.cancelled else RunStatus.CANCELLED
             job.result = ModelRunResult(
@@ -181,6 +185,7 @@ class LibraryModelRunner(ModelRunner):
                 started_at=job.started_at,
                 ended_at=_now_iso(),
             )
+            self._log.exception("Library run failed", extra={"run_id": run_id})
 
     def _require_library_binding(self, binding: Optional[ExecutionBinding]) -> ExecutionBinding:
         if binding is None:

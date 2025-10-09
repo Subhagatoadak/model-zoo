@@ -10,6 +10,8 @@ from ..contracts.run_requests import (
     MetricComputeRequest, MetricComputeResult, EvaluationSpec
 )
 from ..runners.base import ModelRunner, MetricRunner
+from ..utils.logging import get_logger
+import uuid
 
 @dataclass
 class ModelZoo:
@@ -21,14 +23,25 @@ class ModelZoo:
     audit: Optional[AuditLog] = None
     binding_registry: Optional[Any] = None  # optional external binding store
     _eval_specs: Dict[str, Dict[str, Any]] = None  # internal: run_id -> {spec, y_true_ref}
+    _log = get_logger(__name__)
 
     # registries
     def register_model(self, spec: ModelSpec, actor: str = "system") -> None:
-        self.model_registry.register(spec)
+        try:
+            self.model_registry.register(spec)
+            self._log.info("Registered model", extra={"model_id": spec.model_id})
+        except Exception:
+            self._log.exception("Failed to register model", extra={"model_id": spec.model_id})
+            raise
         self._audit("REGISTER_MODEL", actor, spec.model_id, spec.to_dict())
 
     def register_metric(self, spec: EvalMetricSpec, actor: str = "system") -> None:
-        self.metric_registry.register(spec)
+        try:
+            self.metric_registry.register(spec)
+            self._log.info("Registered metric", extra={"metric_id": spec.metric_id})
+        except Exception:
+            self._log.exception("Failed to register metric", extra={"metric_id": spec.metric_id})
+            raise
         self._audit("REGISTER_METRIC", actor, spec.metric_id, spec.to_dict())
 
     def list_models(self) -> List[ModelSpec]:
@@ -43,6 +56,8 @@ class ModelZoo:
         self.validator.validate_model_params(spec, req.params)
         # If a binding registry exists, attach binding here (kept outside registries)
         self._audit("RUN_SUBMIT", actor, req.model_id, req.to_dict())
+        trace_id = str(uuid.uuid4())
+        self._log.info("Submitting run", extra={"model_id": req.model_id, "trace_id": trace_id})
         handle = self.model_runner.submit(req)
         # Initialize eval spec store
         if self._eval_specs is None:
@@ -50,12 +65,26 @@ class ModelZoo:
         if req.evaluation is not None:
             y_key = req.evaluation.y_true_key
             y_ref = req.inputs.get(y_key)
-            self._eval_specs[handle.run_id] = {"spec": req.evaluation, "y_true": y_ref}
+            self._eval_specs[handle.run_id] = {"spec": req.evaluation, "y_true": y_ref, "trace_id": trace_id}
+        else:
+            self._eval_specs[handle.run_id] = {"spec": None, "y_true": None, "trace_id": trace_id}
         return handle
 
     def get_run_result(self, run_id: str, actor: str = "system") -> ModelRunResult:
         res = self.model_runner.result(run_id)
         self._audit("RUN_RESULT", actor, run_id, {"status": res.status.value})
+        # attach trace_id to metadata
+        try:
+            plan = self._eval_specs.get(run_id) if getattr(self, "_eval_specs", None) else None
+            if plan:
+                trace_id = plan.get("trace_id")
+                if trace_id:
+                    if isinstance(res.metadata, dict):
+                        res.metadata.setdefault("trace_id", trace_id)
+                    else:
+                        res.metadata = {"trace_id": trace_id}
+        except Exception:
+            self._log.debug("Failed to attach trace_id", exc_info=True)
         # Inline evaluation: compute train/valid metrics and R-style summary
         if getattr(self, "_eval_specs", None) and run_id in self._eval_specs:
             plan = self._eval_specs[run_id]
@@ -95,7 +124,7 @@ class ModelZoo:
                         # Build an R-style summary structure
                         res.summary = self._build_r_style_summary(run_id, res, spec, y_true_ref)
                 except Exception:
-                    pass
+                    self._log.exception("Evaluation failed", extra={"run_id": run_id})
         return res
 
     def _compute_metrics_set(self, metric_ids: List[str], y_true, y_pred, bindings: Dict[str, Any]) -> Dict[str, float]:
@@ -161,7 +190,11 @@ class ModelZoo:
         spec = self.metric_registry.get(req.metric_id)
         self.validator.validate_metric_params(spec, req.params)
         self._audit("METRIC_COMPUTE", actor, req.metric_id, req.to_dict())
-        return self.metric_runner.compute(req)
+        try:
+            return self.metric_runner.compute(req)
+        except Exception:
+            self._log.exception("Metric compute failed", extra={"metric_id": req.metric_id})
+            raise
 
     def compute_all_metrics(
         self,
@@ -192,6 +225,7 @@ class ModelZoo:
         results: dict[str, MetricComputeResult] = {}
         for mid in metric_ids:
             if mid not in all_specs:
+                self._log.error("Unknown metric_id in compute_all_metrics", extra={"metric_id": mid})
                 raise KeyError(f"Unknown metric_id: {mid}")
             spec = all_specs[mid]
 
@@ -204,6 +238,7 @@ class ModelZoo:
                 except Exception:
                     binding = None
             if binding is None:
+                self._log.error("Missing binding for metric", extra={"metric_id": mid})
                 raise ValueError(f"No binding provided for metric '{mid}' and no binding registry configured")
 
             def to_ref(v):
@@ -223,7 +258,11 @@ class ModelZoo:
                 params=params_by_metric.get(mid, {}),
                 binding=binding,
             )
-            results[mid] = self.compute_metric(req, actor=actor)
+            try:
+                results[mid] = self.compute_metric(req, actor=actor)
+            except Exception:
+                self._log.exception("Metric compute failed in batch", extra={"metric_id": mid})
+                raise
         return results
 
     def _audit(self, kind: str, who: str, ref_id: str, payload: Dict[str, Any]) -> None:

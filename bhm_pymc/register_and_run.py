@@ -9,6 +9,7 @@ from model_zoo import (
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo.examples.models import make_synthetic_linear
 from model_zoo import r_style_summary_string
+from model_zoo.utils.logging import configure_logging, get_logger
 from model_zoo.examples import metrics as example_metrics
 from model_zoo.contracts.validation import ParamValidationService
 from model_zoo import DefaultParamValidator
@@ -19,6 +20,9 @@ class PrintAudit(AuditLog):
         print(f"[AUDIT] {event.kind} ref={event.ref_id}")
 
 def main():
+    configure_logging("INFO")
+    log = get_logger(__name__)
+    log.info("Starting example run")
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
     zoo = ModelZoo(model_reg, metric_reg,
                    binding_registry=None,  # not needed; we pass binding on request in this demo
@@ -172,8 +176,12 @@ def main():
             time.sleep(0.01)
         return res
 
-    lin_handle = zoo.submit_run(lin_req, actor="you")
-    lin_res = wait_for_result(zoo, lin_handle.run_id, actor="you")
+    try:
+        lin_handle = zoo.submit_run(lin_req, actor="you")
+        lin_res = wait_for_result(zoo, lin_handle.run_id, actor="you")
+    except Exception:
+        log.exception("Linear run failed")
+        raise
     print("LinearRegression: status=", lin_res.status.value)
     print(r_style_summary_string(lin_res.summary))
 
@@ -207,8 +215,12 @@ def main():
             }
         ),
     )
-    bayes_handle = zoo.submit_run(bayes_req, actor="you")
-    bayes_res = wait_for_result(zoo, bayes_handle.run_id, actor="you")
+    try:
+        bayes_handle = zoo.submit_run(bayes_req, actor="you")
+        bayes_res = wait_for_result(zoo, bayes_handle.run_id, actor="you")
+    except Exception:
+        log.exception("Bayesian run failed")
+        raise
     print("BayesLinear: status=", bayes_res.status.value)
     print(r_style_summary_string(bayes_res.summary))
 
@@ -246,8 +258,12 @@ def main():
             }
         ),
     )
-    bayes_handle2 = zoo.submit_run(bayes_req_custom, actor="you")
-    bayes_res2 = wait_for_result(zoo, bayes_handle2.run_id, actor="you")
+    try:
+        bayes_handle2 = zoo.submit_run(bayes_req_custom, actor="you")
+        bayes_res2 = wait_for_result(zoo, bayes_handle2.run_id, actor="you")
+    except Exception:
+        log.exception("Bayesian run (custom priors) failed")
+        raise
     print("BayesLinear (custom priors): status=", bayes_res2.status.value)
     print(r_style_summary_string(bayes_res2.summary))
 
