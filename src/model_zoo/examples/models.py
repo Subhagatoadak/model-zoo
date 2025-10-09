@@ -45,15 +45,10 @@ def linreg_train_and_infer(inputs: Dict[str, Any], params: Dict[str, Any], conte
 
     y_pred = [alpha + beta * x for x in X]
 
-    # R^2
-    y_mean = _mean(y)
-    ss_tot = sum((yi - y_mean) ** 2 for yi in y)
-    ss_res = sum((yi - yhat) ** 2 for yi, yhat in zip(y, y_pred))
-    r2 = 1.0 - (ss_res / (ss_tot + 1e-12)) if ss_tot > 0 else 0.0
-
     return {
         "predictions": y_pred,
-        "diagnostics": {"r2": r2, "slope": beta, "intercept": alpha},
+        # Keep coefficients here; evaluation metrics are computed separately
+        "diagnostics": {"slope": beta, "intercept": alpha},
         "metadata": {"model": "linear_regression", "fit_intercept": fit_intercept},
     }
 
@@ -123,4 +118,3 @@ def make_synthetic_linear(n: int = 100, slope: float = 2.0, intercept: float = 1
     X = [(i + 1) / 10.0 for i in range(n)]
     y = [intercept + slope * x + random.gauss(0, noise_sigma) for x in X]
     return X, y
-
