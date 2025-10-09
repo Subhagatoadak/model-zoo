@@ -14,9 +14,11 @@ class BindingRegistry:
     """
 
     def get_model_binding(self, model_id: str) -> Optional[Any]:
+        """Return the execution binding for a model_id, or None if missing."""
         raise NotImplementedError
 
     def get_metric_binding(self, metric_id: str) -> Optional[Any]:
+        """Return the execution binding for a metric_id, or None if missing."""
         raise NotImplementedError
 
 
@@ -28,14 +30,17 @@ class InMemoryBindingRegistry(BindingRegistry):
         self._metric_bindings: Dict[str, Any] = {}
 
     def register_model_binding(self, model_id: str, binding: Any) -> None:
+        """Register or replace the binding for a given model_id."""
         self._model_bindings[model_id] = binding
 
     def register_metric_binding(self, metric_id: str, binding: Any) -> None:
+        """Register or replace the binding for a given metric_id."""
         self._metric_bindings[metric_id] = binding
 
     def get_model_binding(self, model_id: str) -> Optional[Any]:
+        """Return the binding registered for model_id, if any."""
         return self._model_bindings.get(model_id)
 
     def get_metric_binding(self, metric_id: str) -> Optional[Any]:
+        """Return the binding registered for metric_id, if any."""
         return self._metric_bindings.get(metric_id)
-

@@ -8,7 +8,10 @@ from typing import Any, Dict, List, Optional, Callable
 
 
 class EventBus:
+    """Abstract event bus for publishing lifecycle notifications."""
+
     def publish(self, topic: str, payload: Dict[str, Any]) -> None:
+        """Publish a topic/payload event. Implementations decide delivery semantics."""
         raise NotImplementedError
 
 
@@ -19,9 +22,11 @@ class InMemoryEventBus(EventBus):
         self._listeners: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
 
     def subscribe(self, topic: str, fn: Callable[[Dict[str, Any]], None]) -> None:
+        """Register a callback to be invoked when `topic` is published."""
         self._listeners.setdefault(topic, []).append(fn)
 
     def publish(self, topic: str, payload: Dict[str, Any]) -> None:
+        """Invoke all listeners for `topic` with `payload` (best‑effort)."""
         for fn in self._listeners.get(topic, []):
             try:
                 fn(payload)
@@ -43,6 +48,7 @@ class WebhookEventBus(EventBus):
         self._timeout = timeout_s
 
     def publish(self, topic: str, payload: Dict[str, Any]) -> None:
+        """POST an event to the configured webhook endpoint (best‑effort)."""
         try:
             import requests
             body = {"topic": topic, "payload": payload}
@@ -50,4 +56,3 @@ class WebhookEventBus(EventBus):
         except Exception:
             # best-effort: ignore failures in publisher
             pass
-

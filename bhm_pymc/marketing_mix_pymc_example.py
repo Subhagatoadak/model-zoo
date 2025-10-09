@@ -66,6 +66,11 @@ def make_synthetic_marketing_mix(n: int = 52, seed: int = 42):
 
 
 def main():
+    """Run a PyMC Bayesian marketing mix example with mixed per-variable priors.
+
+    Walks through: data synthesis, Model Zoo setup, binding registration, model
+    submission with EvaluationSpec, and pretty-printed R-style summary.
+    """
     # 4) Set up logging (INFO) and quiet noisy third‑party logs
     configure_logging("INFO")
     quiet_third_party_loggers()

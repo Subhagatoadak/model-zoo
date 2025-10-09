@@ -71,6 +71,12 @@ def make_synthetic_marketing_hier(n_weeks: int = 52, n_geo: int = 5, n_brand: in
 
 
 def main():
+    """Run a hierarchical (geo/brand) Bayesian MMM with mixed priors.
+
+    Steps: data synthesis with categorical effects, Model Zoo setup, binding
+    registration, model submission with EvaluationSpec, event subscriptions,
+    and printing an R-style summary with named coefficients and group effects.
+    """
     # 1) Logging and quieting third-party library verbosity
     configure_logging("INFO")
     quiet_third_party_loggers()

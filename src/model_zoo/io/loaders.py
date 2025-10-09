@@ -10,10 +10,17 @@ from ..contracts.io import DataRef, DataRefType
 
 
 class DefaultDataLoader:
+    """Resolve a `DataRef` into a Python value.
+
+    INLINE refs return their `inline` value directly. URI refs are returned
+    unchanged by default; downstream callables may decide how to load them, or
+    you may subclass this loader to handle specific schemes (e.g., file/s3).
+    """
+
     def load(self, ref: DataRef) -> Any:
+        """Load a `DataRef` into a usable value for in‑process callables."""
         if ref.ref_type == DataRefType.INLINE:
             return ref.inline
         # For URIs we return the DataRef for the callable to handle. Users can
         # subclass and implement scheme-specific fetching.
         return ref
-

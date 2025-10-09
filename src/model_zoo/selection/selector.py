@@ -12,6 +12,7 @@ from ..registry.models import ModelRegistry, ModelSpec, ModelKind
 
 @dataclass
 class SelectionCriteria:
+    """Filter fields used to select a model from the registry."""
     kind: Optional[ModelKind] = None
     required_tags: List[str] = None
     metadata_equals: Dict[str, Any] = None
@@ -19,6 +20,7 @@ class SelectionCriteria:
 
 class ModelSelectionService:
     def __init__(self, registry: ModelRegistry) -> None:
+        """Create a selector backed by a ModelRegistry."""
         self._registry = registry
 
     def select(self, criteria: SelectionCriteria) -> Optional[ModelSpec]:
@@ -41,4 +43,3 @@ class ModelSelectionService:
             return None
         # naive string compare; applications can implement semver if needed
         return max(candidates, key=lambda s: s.version)
-

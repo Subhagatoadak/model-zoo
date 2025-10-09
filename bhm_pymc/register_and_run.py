@@ -24,6 +24,14 @@ class PrintAudit(AuditLog):
         print(f"[AUDIT] {event.kind} ref={event.ref_id}")
 
 def main():
+    """Register models/metrics, wire binding registry, submit example runs, and print summaries.
+
+    Demonstrates:
+    - BindingRegistry for model/metric bindings
+    - InMemoryRunStore for simple persistence
+    - EventBus for status/evaluation notifications
+    - Timeouts, retries, and concurrency controls in the Library runner
+    """
     configure_logging("INFO")
     quiet_third_party_loggers()
     log = get_logger(__name__)
