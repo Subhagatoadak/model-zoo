@@ -24,6 +24,7 @@ class ModelZoo:
     binding_registry: Optional[Any] = None  # optional external binding store
     _eval_specs: Dict[str, Dict[str, Any]] = None  # internal: run_id -> {spec, y_true_ref}
     _log = get_logger(__name__)
+    _result_audits: Dict[str, str] = None  # run_id -> last audited status
 
     # registries
     def register_model(self, spec: ModelSpec, actor: str = "system") -> None:
@@ -72,7 +73,13 @@ class ModelZoo:
 
     def get_run_result(self, run_id: str, actor: str = "system") -> ModelRunResult:
         res = self.model_runner.result(run_id)
-        self._audit("RUN_RESULT", actor, run_id, {"status": res.status.value})
+        # audit RUN_RESULT only on status change
+        if self._result_audits is None:
+            self._result_audits = {}
+        last = self._result_audits.get(run_id)
+        if last != res.status.value:
+            self._audit("RUN_RESULT", actor, run_id, {"status": res.status.value})
+            self._result_audits[run_id] = res.status.value
         # attach trace_id to metadata
         try:
             plan = self._eval_specs.get(run_id) if getattr(self, "_eval_specs", None) else None

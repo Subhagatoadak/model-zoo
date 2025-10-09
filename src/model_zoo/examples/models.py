@@ -53,11 +53,12 @@ def linreg_train_and_infer(inputs: Dict[str, Any], params: Dict[str, Any], conte
 
     y_pred = [alpha + beta * x for x in X]
 
+    feat_name = params.get("feature_name", "x")
     return {
         "predictions": y_pred,
         # Keep coefficients here; evaluation metrics are computed separately
-        "diagnostics": {"slope": beta, "intercept": alpha},
-        "metadata": {"model": "linear_regression", "fit_intercept": fit_intercept},
+        "diagnostics": {f"coef[{feat_name}]": beta, "intercept": alpha},
+        "metadata": {"model": "linear_regression", "fit_intercept": fit_intercept, "feature_names": [feat_name]},
     }
 
 
@@ -200,13 +201,10 @@ def bayes_linreg_train_and_infer(inputs: Dict[str, Any], params: Dict[str, Any],
                 samples.append({"beta": beta_s, "alpha": alpha_s})
         artifacts["posterior_samples"] = samples
 
+    feat_name = params.get("feature_name", "x")
     return {
         "predictions": y_pred,
-        "diagnostics": {
-            "beta": beta_map,
-            "alpha": alpha_map,
-            **posterior_info,
-        },
+        "diagnostics": {f"coef[{feat_name}]": beta_map, "intercept": alpha_map, **posterior_info},
         "metadata": {
             "model": "bayesian_linear_regression",
             "sigma": sigma,
@@ -214,6 +212,7 @@ def bayes_linreg_train_and_infer(inputs: Dict[str, Any], params: Dict[str, Any],
             "prior_tau": prior_tau,
             "fit_intercept": fit_intercept,
             "draws": draws,
+            "feature_names": [feat_name],
         },
         "artifacts": artifacts,
     }
@@ -225,3 +224,51 @@ def make_synthetic_linear(n: int = 100, slope: float = 2.0, intercept: float = 1
     X = [(i + 1) / 10.0 for i in range(n)]
     y = [intercept + slope * x + random.gauss(0, noise_sigma) for x in X]
     return X, y
+
+
+def make_synthetic_mtcars_wt_mpg(n: int = 32,
+                                  alpha: float = 35.0,
+                                  beta: float = -5.0,
+                                  noise_sigma: float = 2.0,
+                                  seed: int = 1973) -> Tuple[List[float], List[float]]:
+    """Generate synthetic 'mtcars'-like data for mpg ~ wt.
+
+    - wt roughly between 1.5 and 5.5 (1000s of lbs)
+    - mpg decreases linearly with wt + Gaussian noise
+    """
+    import random
+    random.seed(seed)
+    wt = [random.uniform(1.5, 5.5) for _ in range(n)]
+    mpg = [alpha + beta * w + random.gauss(0, noise_sigma) for w in wt]
+    return wt, mpg
+
+
+def make_synthetic_mtcars_multi(
+    n: int = 32,
+    alpha: float = 40.0,
+    betas: Dict[str, float] | None = None,
+    noise_sigma: float = 2.0,
+    seed: int = 1974,
+) -> Tuple[List[Dict[str, float]], List[float], List[str]]:
+    """Generate synthetic 'mtcars'-like data with multiple predictors for mpg.
+
+    Predictors include: wt (1.5..5.5), hp (50..300), disp (70..500).
+    betas: mapping from feature to coefficient. Defaults: wt=-4.0, hp=-0.01, disp=-0.005
+    Returns: X (list of dict rows), y (list), feature_names (list)
+    """
+    import random
+    random.seed(seed)
+    if betas is None:
+        betas = {"wt": -4.0, "hp": -0.01, "disp": -0.005}
+    feats = ["wt", "hp", "disp"]
+    X_rows: List[Dict[str, float]] = []
+    y: List[float] = []
+    for _ in range(n):
+        wt = random.uniform(1.5, 5.5)
+        hp = random.uniform(50, 300)
+        disp = random.uniform(70, 500)
+        row = {"wt": wt, "hp": hp, "disp": disp}
+        mu = alpha + sum(betas[k] * row[k] for k in feats)
+        y.append(mu + random.gauss(0, noise_sigma))
+        X_rows.append(row)
+    return X_rows, y, feats

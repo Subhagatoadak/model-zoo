@@ -19,7 +19,25 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
     if X is None or y is None:
         raise ValueError("inputs must contain 'X' and 'y'")
 
-    X_arr = np.array(X, dtype=float).reshape(-1)
+    # Normalize X to (n, p), y to (n,)
+    if isinstance(X[0], dict):
+        feature_names = params.get("feature_names")
+        keys = list(X[0].keys())
+        if feature_names is None:
+            feature_names = keys
+        else:
+            missing = [k for k in feature_names if k not in keys]
+            if missing:
+                raise ValueError(f"feature_names not found in X dict keys: {missing}")
+            keys = feature_names
+        X_mat = [[float(row[k]) for k in keys] for row in X]
+        X_arr = np.array(X_mat, dtype=float)
+    elif isinstance(X[0], (int, float)):
+        X_arr = np.array(X, dtype=float).reshape(-1, 1)
+        feature_names = [params.get("feature_name", "x")]
+    else:
+        X_arr = np.array(X, dtype=float)
+        feature_names = params.get("feature_names") or [f"x{i}" for i in range(X_arr.shape[1])]
     y_arr = np.array(y, dtype=float).reshape(-1)
 
     # Optional: train subset
@@ -36,16 +54,33 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
 
     priors = params.get("priors", {}) or {}
     beta_prior = priors.get("beta", {})
-    beta_mu = float(beta_prior.get("mu", 0.0))
-    beta_tau = float(beta_prior.get("tau", 10.0))
+    # Support scalar or per-feature vectors for mu and tau
+    p = X_arr.shape[1]
+    mu_raw = beta_prior.get("mu", 0.0)
+    tau_raw = beta_prior.get("tau", 10.0)
+    if isinstance(mu_raw, list):
+        if len(mu_raw) != p: raise ValueError("beta.mu length must equal number of features")
+        beta_mu = np.array(mu_raw, dtype=float)
+    else:
+        beta_mu = float(mu_raw)
+    if isinstance(tau_raw, list):
+        if len(tau_raw) != p: raise ValueError("beta.tau length must equal number of features")
+        beta_tau = np.array(tau_raw, dtype=float)
+    else:
+        beta_tau = float(tau_raw)
     sigma_prior = priors.get("sigma", {})
     sigma_scale = float(sigma_prior.get("scale", 1.0))
 
     with pm.Model() as model:
         alpha = pm.Normal("alpha", mu=0.0, sigma=10.0)
-        beta = pm.Normal("beta", mu=beta_mu, sigma=beta_tau)
+        # beta vector if p>1, otherwise scalar
+        if p == 1:
+            beta = pm.Normal("beta", mu=beta_mu, sigma=beta_tau)
+            mu = alpha + beta * X_train
+        else:
+            beta = pm.Normal("beta", mu=beta_mu, sigma=beta_tau, shape=p)
+            mu = alpha + pm.math.dot(X_train, beta)
         sigma = pm.HalfNormal("sigma", sigma=sigma_scale)
-        mu = alpha + beta * X_train
         pm.Normal("y_obs", mu=mu, sigma=sigma, observed=y_train)
 
         idata = pm.sample(
@@ -58,28 +93,25 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
         )
 
     # Posterior means
-    try:
-        import numpy as np
-        alpha_mean = float(idata.posterior["alpha"].values.mean())
-        beta_mean = float(idata.posterior["beta"].values.mean())
-    except Exception:
-        # Fallback: use last draw
-        alpha_mean = float(idata.posterior["alpha"].values.reshape(-1)[-1])
-        beta_mean = float(idata.posterior["beta"].values.reshape(-1)[-1])
+    import numpy as _np
+    alpha_mean = float(idata.posterior["alpha"].values.mean())
+    beta_vals = idata.posterior["beta"].values
+    beta_mean_arr = _np.array(beta_vals).mean(axis=(0, 1))  # average over chain, draw
+    beta_mean = float(beta_mean_arr) if p == 1 else beta_mean_arr.reshape(-1)
 
-    y_pred = (alpha_mean + beta_mean * X_arr).tolist()
+    y_pred = (alpha_mean + (X_arr * beta_mean if p == 1 else X_arr.dot(beta_mean))).tolist()
 
-    diagnostics: Dict[str, Any] = {
-        "alpha": alpha_mean,
-        "beta": beta_mean,
-        "draws": draws,
-        "tune": tune,
-        "target_accept": target_accept,
-    }
+    diagnostics: Dict[str, Any] = {"alpha": alpha_mean, "draws": draws, "tune": tune, "target_accept": target_accept}
+    # add named coefficients
+    if p == 1:
+        name = feature_names[0]
+        diagnostics[f"coef[{name}]"] = float(beta_mean)
+    else:
+        for i, name in enumerate(feature_names):
+            diagnostics[f"coef[{name}]"] = float(beta_mean[i])
 
     return {
         "predictions": y_pred,
         "diagnostics": diagnostics,
-        "metadata": {"model": "pymc_linear_nuts"},
+        "metadata": {"model": "pymc_linear_nuts", "feature_names": feature_names},
     }
-

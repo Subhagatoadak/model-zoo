@@ -7,7 +7,7 @@ from model_zoo import (
     ModelRunRequest, MetricComputeRequest, EvaluationSpec,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
-from model_zoo.examples.models import make_synthetic_linear
+from model_zoo.examples.models import make_synthetic_linear, make_synthetic_mtcars_wt_mpg
 from model_zoo import r_style_summary_string
 from model_zoo.utils.logging import configure_logging, get_logger
 from model_zoo.examples.sklearn_models import sk_lr_train_and_infer  # noqa: F401 (for binding importability)
@@ -151,7 +151,7 @@ def main():
     lin_req = ModelRunRequest(
         model_id="linear_regression_v1",
         inputs={"X": X_ref, "y": y_ref},
-        params={"fit_intercept": True, "train_indices": train_idx},
+        params={"fit_intercept": True, "train_indices": train_idx, "feature_name": "X"},
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic:v1",
         binding=lin_binding,
@@ -200,6 +200,7 @@ def main():
             "draws": 200,
             "tune": 100,
             "priors": {"beta": {"mu": 0.0, "tau": 5.0}},
+            "feature_name": "X",
         },
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic:v1",
@@ -243,6 +244,7 @@ def main():
             "train_indices": train_idx,
             "draws": 100,
             "priors": custom_priors,
+            "feature_name": "X",
         },
         context=ExecutionContext(random_seed=2025),
         dataset_version="synthetic:v1",
@@ -271,6 +273,170 @@ def main():
     
     
     # ------------------------------------------------------------------
+    # Bayesian model with synthetic mtcars-like data (mpg ~ wt) and custom priors
+    wt, mpg = make_synthetic_mtcars_wt_mpg(n=32, alpha=36.0, beta=-4.5, noise_sigma=2.0)
+    wt_ref = DataRef(ref_type=DataRefType.INLINE, inline=wt)
+    mpg_ref = DataRef(ref_type=DataRefType.INLINE, inline=mpg)
+    n_m = len(wt)
+    split_m = int(0.75 * n_m)
+    tr_idx_m = list(range(split_m))
+    te_idx_m = list(range(split_m, n_m))
+
+    mtcars_spec = ModelSpec(
+        model_id="bayes_mtcars_wt_v1",
+        name="BayesianLinearRegression_mtcars_wt",
+        version="1.0.0",
+        kind=ModelKind.LIBRARY,
+        hyperparams=bayes_hp,
+        tags=["bayesian", "mtcars", "regression"],
+        metadata={"example": True},
+    )
+    zoo.register_model(mtcars_spec, actor="you")
+
+    mtcars_binding = ExecutionBinding(
+        bound_id="bayes_mtcars_wt_v1", kind=BindingKind.LIBRARY,
+        module="model_zoo.examples.models", callable="bayes_linreg_train_and_infer",
+    )
+    mtcars_req = ModelRunRequest(
+        model_id="bayes_mtcars_wt_v1",
+        inputs={"X": wt_ref, "y": mpg_ref},
+        params={
+            "sigma": 2.0,
+            "fit_intercept": True,
+            "train_indices": tr_idx_m,
+            "draws": 200,
+            "priors": {
+                "beta": {"distribution": "normal", "mu": -4.0, "tau": 3.0},
+                "sigma": {"distribution": "gamma", "shape": 3.0, "rate": 2.0},
+            },
+            "feature_name": "wt",
+        },
+        context=ExecutionContext(random_seed=2025),
+        dataset_version="synthetic_mtcars:v1",
+        binding=mtcars_binding,
+        evaluation=EvaluationSpec(
+            metric_ids=["r2_v1", "mse_v1"],
+            y_true_key="y",
+            compute_train=True,
+            compute_valid=True,
+            train_indices=tr_idx_m,
+            test_indices=te_idx_m,
+            bindings={"r2_v1": r2_binding, "mse_v1": mse_binding},
+        ),
+    )
+    try:
+        mt_handle = zoo.submit_run(mtcars_req, actor="you")
+        mt_res = wait_for_result(zoo, mt_handle.run_id, actor="you")
+        print("Bayes (mtcars mpg~wt): status=", mt_res.status.value)
+        print(r_style_summary_string(mt_res.summary))
+    except Exception as e:
+        log.exception("Bayesian mtcars example failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Multivariate mtcars-like: mpg ~ wt + hp + disp
+    X_rows, y_m, feat_names = make_synthetic_mtcars_multi()
+    X_rows_ref = DataRef(ref_type=DataRefType.INLINE, inline=X_rows)
+    y_m_ref = DataRef(ref_type=DataRefType.INLINE, inline=y_m)
+    n_mv = len(X_rows)
+    split_mv = int(0.75 * n_mv)
+    tr_idx_mv = list(range(split_mv))
+    te_idx_mv = list(range(split_mv, n_mv))
+
+    # Sklearn multivariate
+    sk_multi_spec = ModelSpec(
+        model_id="sklearn_linear_mtcars_v1",
+        name="SklearnLinearRegression_MTCarsMulti",
+        version="1.0.0",
+        kind=ModelKind.LIBRARY,
+        hyperparams=HyperParamSpace(fields={
+            "fit_intercept": HyperParamField("fit_intercept", DType.BOOL, default=True),
+            "feature_names": HyperParamField("feature_names", DType.LIST, default=None),
+        }),
+        tags=["sklearn", "linear", "mtcars"],
+        metadata={"example": True}
+    )
+    zoo.register_model(sk_multi_spec, actor="you")
+    sk_multi_binding = ExecutionBinding(
+        bound_id="sklearn_linear_mtcars_v1", kind=BindingKind.LIBRARY,
+        module="model_zoo.examples.sklearn_models", callable="sk_lr_train_and_infer",
+    )
+    sk_multi_req = ModelRunRequest(
+        model_id="sklearn_linear_mtcars_v1",
+        inputs={"X": X_rows_ref, "y": y_m_ref},
+        params={"fit_intercept": True, "train_indices": tr_idx_mv, "feature_names": feat_names},
+        binding=sk_multi_binding,
+        context=ExecutionContext(random_seed=2025),
+        evaluation=EvaluationSpec(
+            metric_ids=["r2_v1", "mse_v1"],
+            y_true_key="y",
+            compute_train=True,
+            compute_valid=True,
+            train_indices=tr_idx_mv,
+            test_indices=te_idx_mv,
+            bindings={"r2_v1": r2_binding, "mse_v1": mse_binding},
+        ),
+    )
+    try:
+        skm_handle = zoo.submit_run(sk_multi_req, actor="you")
+        skm_res = wait_for_result(zoo, skm_handle.run_id, actor="you")
+        print("SklearnLinear (mtcars multi): status=", skm_res.status.value)
+        print(r_style_summary_string(skm_res.summary))
+    except Exception as e:
+        log.warning("Sklearn multivariate example skipped: %s", e)
+
+    # PyMC multivariate NUTS
+    pymc_multi_spec = ModelSpec(
+        model_id="pymc_linear_nuts_mtcars_v1",
+        name="PyMCLinearNUTS_MTCarsMulti",
+        version="1.0.0",
+        kind=ModelKind.LIBRARY,
+        hyperparams=HyperParamSpace(fields={
+            "draws": HyperParamField("draws", DType.INT, default=500),
+            "tune": HyperParamField("tune", DType.INT, default=500),
+            "target_accept": HyperParamField("target_accept", DType.FLOAT, default=0.9),
+            "priors": HyperParamField("priors", DType.DICT, default=None),
+            "feature_names": HyperParamField("feature_names", DType.LIST, default=None),
+        }),
+        tags=["pymc", "nuts", "bayesian", "mtcars"],
+        metadata={"example": True}
+    )
+    zoo.register_model(pymc_multi_spec, actor="you")
+    pymc_multi_binding = ExecutionBinding(
+        bound_id="pymc_linear_nuts_mtcars_v1", kind=BindingKind.LIBRARY,
+        module="model_zoo.examples.pymc_models", callable="pymc_linear_nuts",
+    )
+    pymc_multi_req = ModelRunRequest(
+        model_id="pymc_linear_nuts_mtcars_v1",
+        inputs={"X": X_rows_ref, "y": y_m_ref},
+        params={
+            "draws": 300,
+            "tune": 300,
+            "target_accept": 0.9,
+            "train_indices": tr_idx_mv,
+            "feature_names": feat_names,
+            # scalar priors per-feature (shared), but can also pass lists matching feat_names
+            "priors": {"beta": {"mu": 0.0, "tau": 10.0}, "sigma": {"scale": 2.0}},
+        },
+        binding=pymc_multi_binding,
+        context=ExecutionContext(random_seed=2025),
+        evaluation=EvaluationSpec(
+            metric_ids=["r2_v1", "mse_v1"],
+            y_true_key="y",
+            compute_train=True,
+            compute_valid=True,
+            train_indices=tr_idx_mv,
+            test_indices=te_idx_mv,
+            bindings={"r2_v1": r2_binding, "mse_v1": mse_binding},
+        ),
+    )
+    try:
+        pmm_handle = zoo.submit_run(pymc_multi_req, actor="you")
+        pmm_res = wait_for_result(zoo, pmm_handle.run_id, actor="you")
+        print("PyMC NUTS (mtcars multi): status=", pmm_res.status.value)
+        print(r_style_summary_string(pmm_res.summary))
+    except Exception as e:
+        log.warning("PyMC multivariate example skipped: %s", e)
+
     # scikit-learn LinearRegression example (if sklearn installed)
     sk_spec = ModelSpec(
         model_id="sklearn_linear_v1",
@@ -291,7 +457,7 @@ def main():
     sk_req = ModelRunRequest(
         model_id="sklearn_linear_v1",
         inputs={"X": X_ref, "y": y_ref},
-        params={"fit_intercept": True, "train_indices": train_idx},
+        params={"fit_intercept": True, "train_indices": train_idx, "feature_names": ["X"]},
         binding=sk_binding,
         context=ExecutionContext(random_seed=2025),
         evaluation=EvaluationSpec(

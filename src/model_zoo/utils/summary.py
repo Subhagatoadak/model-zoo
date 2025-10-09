@@ -45,18 +45,37 @@ def r_style_summary_string(summary: Dict[str, Any]) -> str:
     if isinstance(coeffs, dict) and coeffs:
         lines.append("")
         lines.append("Coefficients:")
-        # Determine column widths
+
+        def to_display(v):
+            # Returns (is_numeric, text)
+            try:
+                # scalar numeric
+                f = float(v)
+                return True, f"{f:.6f}"
+            except Exception:
+                pass
+            # list of numerics
+            if isinstance(v, list):
+                parts = []
+                for x in v:
+                    try:
+                        parts.append(f"{float(x):.6f}")
+                    except Exception:
+                        parts.append(str(x))
+                return False, "[" + ", ".join(parts) + "]"
+            # dict or other types
+            return False, str(v)
+
         name_w = max([len("(Intercept)")] + [len(str(k)) for k in coeffs.keys()])
-        est_w = max(len("Estimate"), max(len(f"{float(v):.6f}") for v in coeffs.values())) if coeffs else len("Estimate")
+        est_texts = {k: to_display(v)[1] for k, v in coeffs.items()}
+        est_w = max(len("Estimate"), max(len(t) for t in est_texts.values())) if coeffs else len("Estimate")
+
         header = f"  {'':<{name_w}}  {'Estimate':>{est_w}}"
         lines.append(header)
         lines.append(f"  {'-'*name_w}  {'-'*est_w}")
         for k, v in coeffs.items():
-            try:
-                val = float(v)
-            except Exception:
-                val = v
-            lines.append(f"  {str(k):<{name_w}}  {val:>{est_w}.6f}" if isinstance(val, float) else f"  {str(k):<{name_w}}  {str(val):>{est_w}}")
+            _, txt = to_display(v)
+            lines.append(f"  {str(k):<{name_w}}  {txt:>{est_w}}")
 
     # Fit stats
     fit = summary.get("Fit", {}) or {}
@@ -103,4 +122,3 @@ def r_style_summary_string(summary: Dict[str, Any]) -> str:
                     lines.append(f"  {k}: {v}")
 
     return "\n".join(lines)
-
