@@ -1,9 +1,9 @@
 from __future__ import annotations
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import import_module
-from threading import Lock
+from threading import Lock, Semaphore
 from typing import Any, Callable, Dict, Optional
 
 from .base import ModelRunner, MetricRunner
@@ -65,6 +65,9 @@ class LibraryModelRunner(ModelRunner):
         self,
         max_workers: int = 4,
         data_loader: Optional[Callable[[DataRef], Any]] = None,
+        max_active_runs: Optional[int] = None,
+        max_retries: int = 0,
+        backoff_initial_s: float = 0.1,
     ) -> None:
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="mz-lib-runner")
         self._jobs: Dict[str, _Job] = {}
@@ -72,6 +75,9 @@ class LibraryModelRunner(ModelRunner):
         self._load = data_loader or _default_load
         self._log = get_logger(__name__)
         self._run_store: Optional[RunStore] = None
+        self._sema = Semaphore(max_active_runs or max_workers)
+        self._max_retries = max(0, int(max_retries))
+        self._backoff_initial_s = max(0.0, float(backoff_initial_s))
 
     def submit(self, req: ModelRunRequest) -> ModelRunHandle:
         binding = self._require_library_binding(req.binding)
@@ -124,10 +130,40 @@ class LibraryModelRunner(ModelRunner):
     def _execute(self, run_id: str, req: ModelRunRequest, binding: ExecutionBinding) -> None:
         job = self._jobs[run_id]
         try:
+            self._sema.acquire()
             func = self._resolve_callable(binding)
             loaded_inputs = {k: self._load(v) for k, v in (req.inputs or {}).items()}
-            # Recommended callable signature, but we are permissive
-            out = func(loaded_inputs, req.params, req.context)
+            # Execute with optional timeout, retries, and cooperative cancellation
+            attempts = 0
+            out = None
+            while True:
+                attempts += 1
+                try:
+                    timeout_s = getattr(req.context, "timeout_s", None)
+                    if timeout_s and timeout_s > 0:
+                        with ThreadPoolExecutor(max_workers=1) as _inner:
+                            fut = _inner.submit(func, loaded_inputs, req.params, req.context)
+                            out = fut.result(timeout=float(timeout_s))
+                    else:
+                        out = func(loaded_inputs, req.params, req.context)
+                    break
+                except TimeoutError:
+                    job.status = RunStatus.CANCELLED
+                    job.result = ModelRunResult(
+                        run_id=run_id,
+                        status=job.status,
+                        diagnostics={"error": "timeout"},
+                        metadata={"binding": binding.to_dict()},
+                        started_at=job.started_at,
+                        ended_at=_now_iso(),
+                    )
+                    self._log.warning("Run timed out", extra={"run_id": run_id})
+                    return
+                except Exception as e:
+                    if job.cancelled or attempts > self._max_retries:
+                        raise
+                    import time as _time
+                    _time.sleep(self._backoff_initial_s * attempts)
 
             if isinstance(out, ModelRunResult):
                 result = out
@@ -195,6 +231,11 @@ class LibraryModelRunner(ModelRunner):
             self._log.exception("Library run failed", extra={"run_id": run_id})
             if self._run_store is not None:
                 self._run_store.save(RunRecord(run_id=run_id, result=job.result))
+        finally:
+            try:
+                self._sema.release()
+            except Exception:
+                pass
 
     def _require_library_binding(self, binding: Optional[ExecutionBinding]) -> ExecutionBinding:
         if binding is None:

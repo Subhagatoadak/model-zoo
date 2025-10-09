@@ -24,7 +24,7 @@ from model_zoo import (
     DataRef, DataRefType, ExecutionContext,
     ModelRunRequest, EvaluationSpec,
     InMemoryBindingRegistry, InMemoryRunStore,
-    r_style_summary_string,
+    r_style_summary_string, InMemoryEventBus,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo import DefaultParamValidator
@@ -74,10 +74,14 @@ def main():
 
     # 5) Core Model Zoo wiring: registries, runner with a run store, binding registry, validator
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
-    model_runner = LibraryModelRunner()
+    model_runner = LibraryModelRunner(max_workers=4, max_active_runs=2, max_retries=1, backoff_initial_s=0.2)
     model_runner.set_run_store(InMemoryRunStore())  # persist run results in memory for this process
     metric_runner = LibraryMetricRunner()
     bind_reg = InMemoryBindingRegistry()
+
+    bus = InMemoryEventBus()
+    bus.subscribe("run.status_changed", lambda ev: print("[EVENT] status:", ev.get("status"), ev.get("run_id")))
+    bus.subscribe("run.evaluated", lambda ev: print("[EVENT] evaluated:", ev.get("run_id")))
 
     zoo = ModelZoo(
         model_registry=model_reg,
@@ -86,6 +90,7 @@ def main():
         metric_runner=metric_runner,
         validator=DefaultParamValidator(),
         binding_registry=bind_reg,
+        event_bus=bus,
     )
 
     # 6) Register a PyMC Bayesian linear regression model spec
@@ -167,7 +172,7 @@ def main():
             "feature_names": feat_names,
             "priors": priors,
         },
-        context=ExecutionContext(random_seed=2025),
+        context=ExecutionContext(random_seed=2025, timeout_s=120),
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
             y_true_key="y",
@@ -209,4 +214,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -12,6 +12,7 @@ from ..contracts.run_requests import (
 )
 from ..runners.base import ModelRunner, MetricRunner
 from ..utils.logging import get_logger
+from ..events.bus import EventBus
 import uuid
 
 @dataclass
@@ -34,6 +35,7 @@ class ModelZoo:
     _eval_specs: Dict[str, Dict[str, Any]] = None  # internal: run_id -> {spec, y_true_ref}
     _log = get_logger(__name__)
     _result_audits: Dict[str, str] = None  # run_id -> last audited status
+    event_bus: Optional[EventBus] = None
 
     # registries
     def register_model(self, spec: ModelSpec, actor: str = "system") -> None:
@@ -78,6 +80,11 @@ class ModelZoo:
         self._audit("RUN_SUBMIT", actor, req.model_id, req.to_dict())
         trace_id = str(uuid.uuid4())
         self._log.info("Submitting run", extra={"model_id": req.model_id, "trace_id": trace_id})
+        if self.event_bus:
+            try:
+                self.event_bus.publish("run.submitted", {"model_id": req.model_id, "trace_id": trace_id, "request": req.to_dict()})
+            except Exception:
+                self._log.debug("event_bus publish failed", exc_info=True)
         handle = self.model_runner.submit(req)
         # Initialize eval spec store
         if self._eval_specs is None:
@@ -100,6 +107,11 @@ class ModelZoo:
         if last != res.status.value:
             self._audit("RUN_RESULT", actor, run_id, {"status": res.status.value})
             self._result_audits[run_id] = res.status.value
+            if self.event_bus:
+                try:
+                    self.event_bus.publish("run.status_changed", {"run_id": run_id, "status": res.status.value})
+                except Exception:
+                    self._log.debug("event_bus publish failed", exc_info=True)
         # attach trace_id to metadata
         try:
             plan = self._eval_specs.get(run_id) if getattr(self, "_eval_specs", None) else None
@@ -153,6 +165,11 @@ class ModelZoo:
                     # Always attempt to build a summary, even if metrics failed
                     try:
                         res.summary = self._build_r_style_summary(run_id, res, spec, y_true_ref)
+                        if self.event_bus:
+                            try:
+                                self.event_bus.publish("run.evaluated", {"run_id": run_id, "metrics": {"train": res.eval_train, "validation": res.eval_valid}})
+                            except Exception:
+                                self._log.debug("event_bus publish failed", exc_info=True)
                     except Exception:
                         self._log.debug("Failed to build summary", exc_info=True)
         # If summary is still empty (e.g., no evaluation spec provided), build a minimal one

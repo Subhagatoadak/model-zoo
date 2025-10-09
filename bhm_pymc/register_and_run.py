@@ -6,6 +6,7 @@ from model_zoo import (
     DataRef, DataRefType, ExecutionContext,
     ModelRunRequest, MetricComputeRequest, EvaluationSpec,
     InMemoryBindingRegistry, InMemoryRunStore,
+    InMemoryEventBus,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo.examples.models import make_synthetic_linear, make_synthetic_mtcars_wt_mpg, make_synthetic_mtcars_multi
@@ -29,15 +30,22 @@ def main():
     log.info("Starting example run")
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
     # Configure runner with an in-memory store; attach binding registry to Zoo
-    model_runner = LibraryModelRunner()
+    # Configure model runner with concurrency + retry policy
+    model_runner = LibraryModelRunner(max_workers=4, max_active_runs=2, max_retries=1, backoff_initial_s=0.2)
     model_runner.set_run_store(InMemoryRunStore())
     bind_reg = InMemoryBindingRegistry()
+    # Simple event bus: subscribe to status/evaluation events for demo
+    bus = InMemoryEventBus()
+    bus.subscribe("run.status_changed", lambda ev: print("[EVENT] status:", ev.get("status"), ev.get("run_id")))
+    bus.subscribe("run.evaluated", lambda ev: print("[EVENT] evaluated:", ev.get("run_id")))
+
     zoo = ModelZoo(model_reg, metric_reg,
                    binding_registry=bind_reg,
                    model_runner=model_runner,
                    metric_runner=LibraryMetricRunner(),
                    validator=DefaultParamValidator(),
-                   audit=PrintAudit())
+                   audit=PrintAudit(),
+                   event_bus=bus)
     
 
     # Define two library models: OLS linear regression and Bayesian linear regression
@@ -164,7 +172,7 @@ def main():
         model_id="linear_regression_v1",
         inputs={"X": X_ref, "y": y_ref},
         params={"fit_intercept": True, "train_indices": train_idx, "feature_name": "X"},
-        context=ExecutionContext(random_seed=2025),
+        context=ExecutionContext(random_seed=2025, timeout_s=60),
         dataset_version="synthetic:v1",
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
@@ -222,7 +230,7 @@ def main():
             "priors": {"beta": {"mu": 0.0, "tau": 5.0}},
             "feature_name": "X",
         },
-        context=ExecutionContext(random_seed=2025),
+        context=ExecutionContext(random_seed=2025, timeout_s=90),
         dataset_version="synthetic:v1",
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
@@ -265,7 +273,7 @@ def main():
             "priors": custom_priors,
             "feature_name": "X",
         },
-        context=ExecutionContext(random_seed=2025),
+        context=ExecutionContext(random_seed=2025, timeout_s=90),
         dataset_version="synthetic:v1",
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],

@@ -24,7 +24,7 @@ from model_zoo import (
     ExecutionBinding, BindingKind,
     DataRef, DataRefType, ExecutionContext,
     ModelRunRequest, EvaluationSpec,
-    InMemoryBindingRegistry, InMemoryRunStore,
+    InMemoryBindingRegistry, InMemoryRunStore, InMemoryEventBus,
     r_style_summary_string,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
@@ -79,11 +79,14 @@ def main():
 
     # 2) Model Zoo wiring
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
-    model_runner = LibraryModelRunner()
+    model_runner = LibraryModelRunner(max_workers=4, max_active_runs=2, max_retries=1, backoff_initial_s=0.2)
     model_runner.set_run_store(InMemoryRunStore())
     metric_runner = LibraryMetricRunner()
     bind_reg = InMemoryBindingRegistry()
-    zoo = ModelZoo(model_reg, metric_reg, model_runner, metric_runner, DefaultParamValidator(), binding_registry=bind_reg)
+    bus = InMemoryEventBus()
+    bus.subscribe("run.status_changed", lambda ev: print("[EVENT] status:", ev.get("status"), ev.get("run_id")))
+    bus.subscribe("run.evaluated", lambda ev: print("[EVENT] evaluated:", ev.get("run_id")))
+    zoo = ModelZoo(model_reg, metric_reg, model_runner, metric_runner, DefaultParamValidator(), binding_registry=bind_reg, event_bus=bus)
 
     # 3) Register a hierarchical model spec (hyperparams carry priors, features, etc.)
     hier_hp = HyperParamSpace(fields={
@@ -165,7 +168,7 @@ def main():
             "brand_key": "brand",
             "priors": priors,
         },
-        context=ExecutionContext(random_seed=2025),
+        context=ExecutionContext(random_seed=2025, timeout_s=180),
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"],
             y_true_key="y",
@@ -206,4 +209,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
