@@ -55,6 +55,69 @@ class ModelZoo:
         self._audit("METRIC_COMPUTE", actor, req.metric_id, req.to_dict())
         return self.metric_runner.compute(req)
 
+    def compute_all_metrics(
+        self,
+        *,
+        y_true: Any,
+        y_pred: Any = None,
+        proba: Any = None,
+        samples: Any = None,
+        metrics: Optional[list[str]] = None,
+        bindings: Optional[dict[str, Any]] = None,
+        params_by_metric: Optional[dict[str, dict[str, Any]]] = None,
+        actor: str = "system",
+    ) -> dict[str, MetricComputeResult]:
+        """Compute a set of registered metrics in one call.
+
+        - metrics: optional list of metric_ids to compute; defaults to all registered.
+        - bindings: map metric_id -> ExecutionBinding. If not provided, requires a binding registry.
+        - params_by_metric: map metric_id -> params dict overrides.
+        Returns a dict metric_id -> MetricComputeResult.
+        """
+        params_by_metric = params_by_metric or {}
+        bindings = bindings or {}
+
+        # Resolve the metric set
+        all_specs = {m.metric_id: m for m in self.metric_registry.list()}
+        metric_ids = metrics if metrics is not None else list(all_specs.keys())
+
+        results: dict[str, MetricComputeResult] = {}
+        for mid in metric_ids:
+            if mid not in all_specs:
+                raise KeyError(f"Unknown metric_id: {mid}")
+            spec = all_specs[mid]
+
+            # Resolve binding per metric
+            binding = bindings.get(mid)
+            if binding is None and self.binding_registry is not None:
+                # If a binding registry is provided by the app, try to fetch from it.
+                try:
+                    binding = self.binding_registry.get_metric_binding(mid)
+                except Exception:
+                    binding = None
+            if binding is None:
+                raise ValueError(f"No binding provided for metric '{mid}' and no binding registry configured")
+
+            def to_ref(v):
+                # Allow passing either DataRef or raw inline values; wrap raw values as DataRef(INLINE)
+                from ..contracts.io import DataRef, DataRefType
+                if isinstance(v, DataRef):
+                    return v
+                return DataRef(ref_type=DataRefType.INLINE, inline=v)
+
+            req = MetricComputeRequest(
+                metric_id=mid,
+                direction=spec.direction.value,
+                y_true=to_ref(y_true),
+                y_pred=None if y_pred is None else to_ref(y_pred),
+                proba=None if proba is None else to_ref(proba),
+                samples=None if samples is None else to_ref(samples),
+                params=params_by_metric.get(mid, {}),
+                binding=binding,
+            )
+            results[mid] = self.compute_metric(req, actor=actor)
+        return results
+
     def _audit(self, kind: str, who: str, ref_id: str, payload: Dict[str, Any]) -> None:
         if not self.audit: return
         from datetime import datetime, timezone

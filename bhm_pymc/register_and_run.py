@@ -158,9 +158,17 @@ def main():
         y_pred=lin_res.predictions,
         binding=mse_binding,
     )
-    lin_r2 = zoo.compute_metric(lin_r2_req, actor="you")
-    lin_mse = zoo.compute_metric(lin_mse_req, actor="you")
-    print("LinearRegression metrics:", {"r2": lin_r2.score, "mse": lin_mse.score})
+    # Or compute all registered metrics in one call
+    lin_metrics = zoo.compute_all_metrics(
+        y_true=y_ref,
+        y_pred=lin_res.predictions,
+        bindings={
+            "r2_v1": r2_binding,
+            "mse_v1": mse_binding,
+        },
+        actor="you",
+    )
+    print("LinearRegression metrics:", {k: v.score for k, v in lin_metrics.items()})
 
     # Switch to Bayesian linear regression (just swap model_id + binding + params)
     bayes_req = ModelRunRequest(
@@ -189,9 +197,16 @@ def main():
         y_pred=bayes_res.predictions,
         binding=mse_binding,
     )
-    bayes_r2 = zoo.compute_metric(bayes_r2_req, actor="you")
-    bayes_mse = zoo.compute_metric(bayes_mse_req, actor="you")
-    print("BayesLinear metrics:", {"r2": bayes_r2.score, "mse": bayes_mse.score})
+    bayes_metrics = zoo.compute_all_metrics(
+        y_true=y_ref,
+        y_pred=bayes_res.predictions,
+        bindings={
+            "r2_v1": r2_binding,
+            "mse_v1": mse_binding,
+        },
+        actor="you",
+    )
+    print("BayesLinear metrics:", {k: v.score for k, v in bayes_metrics.items()})
 
 if __name__ == "__main__":
     main()
