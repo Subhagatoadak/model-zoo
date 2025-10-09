@@ -6,7 +6,7 @@ from model_zoo import (
     DataRef, DataRefType, ExecutionContext,
     ModelRunRequest,
 )
-from model_zoo.runners.fake import FakeModelRunner, FakeMetricRunner
+from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo.contracts.validation import ParamValidationService
 from model_zoo.contracts.audit import AuditLog, AuditEvent
 
@@ -22,8 +22,8 @@ def main():
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
     zoo = ModelZoo(model_reg, metric_reg,
                    binding_registry=None,  # not needed; we pass binding on request in this demo
-                   model_runner=FakeModelRunner(),
-                   metric_runner=FakeMetricRunner(),
+                   model_runner=LibraryModelRunner(),
+                   metric_runner=LibraryMetricRunner(),
                    validator=NoOpValidator(),
                    audit=PrintAudit())
 
