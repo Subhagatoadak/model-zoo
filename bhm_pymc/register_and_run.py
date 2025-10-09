@@ -7,6 +7,7 @@ from model_zoo import (
     ModelRunRequest,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
+from model_zoo.examples.models import make_synthetic_linear
 from model_zoo.contracts.validation import ParamValidationService
 from model_zoo.contracts.audit import AuditLog, AuditEvent
 
@@ -27,46 +28,99 @@ def main():
                    validator=NoOpValidator(),
                    audit=PrintAudit())
     
-    print(zoo)
-    print(dir(zoo))
 
-    hp = HyperParamSpace(fields={
-        "draws": HyperParamField("draws", DType.INT, default=1500, required=True),
-        "tune": HyperParamField("tune", DType.INT, default=1000, required=True),
+    # Define two library models: OLS linear regression and Bayesian linear regression
+    lin_hp = HyperParamSpace(fields={
+        "fit_intercept": HyperParamField("fit_intercept", DType.BOOL, default=True, required=False,
+                                          description="Include intercept in linear model"),
     })
 
-    spec = ModelSpec(
-        model_id="bhm_pymc_v1",
-        name="BayesianHierarchicalSales_PyMC",
+    bayes_hp = HyperParamSpace(fields={
+        "sigma": HyperParamField("sigma", DType.FLOAT, default=0.5, required=True,
+                                  description="Observation noise std"),
+        "prior_tau": HyperParamField("prior_tau", DType.FLOAT, default=10.0, required=False,
+                                      description="Prior std for slope"),
+        "fit_intercept": HyperParamField("fit_intercept", DType.BOOL, default=True, required=False),
+    })
+
+    lin_spec = ModelSpec(
+        model_id="linear_regression_v1",
+        name="LinearRegression_OLS",
         version="1.0.0",
         kind=ModelKind.LIBRARY,
-        hyperparams=hp,
-        tags=["bayesian", "hierarchical"]
-    )
-    zoo.register_model(spec, actor="you")
-
-    binding = ExecutionBinding(
-        bound_id="bhm_pymc_v1", kind=BindingKind.LIBRARY,
-        module="myorg.models.bayes.hierarchical_regression", callable="train_and_infer"
+        hyperparams=lin_hp,
+        tags=["linear", "ols"],
+        metadata={"example": True}
     )
 
-    req = ModelRunRequest(
-        model_id="bhm_pymc_v1",
-        inputs={
-            "X": DataRef(ref_type=DataRefType.URI, uri="s3://bucket/X.parquet", format="parquet"),
-            "y": DataRef(ref_type=DataRefType.URI, uri="s3://bucket/y.parquet", format="parquet"),
-        },
-        params={"draws": 2000, "tune": 1500},
+    bayes_spec = ModelSpec(
+        model_id="bayes_linear_v1",
+        name="BayesianLinearRegression_Conjugate",
+        version="1.0.0",
+        kind=ModelKind.LIBRARY,
+        hyperparams=bayes_hp,
+        tags=["bayesian", "regression"],
+        metadata={"example": True}
+    )
+
+    zoo.register_model(lin_spec, actor="you")
+    zoo.register_model(bayes_spec, actor="you")
+
+    # List models
+    print("Registered models:")
+    for m in zoo.list_models():
+        print(" -", m.model_id, m.name, m.version)
+
+    # Prepare synthetic dataset (INLINE DataRefs)
+    X, y = make_synthetic_linear(n=100, slope=2.0, intercept=1.0, noise_sigma=0.5)
+    X_ref = DataRef(ref_type=DataRefType.INLINE, inline=X)
+    y_ref = DataRef(ref_type=DataRefType.INLINE, inline=y)
+
+    # Bindings to example in-process callables
+    lin_binding = ExecutionBinding(
+        bound_id="linear_regression_v1", kind=BindingKind.LIBRARY,
+        module="model_zoo.examples.models", callable="linreg_train_and_infer",
+    )
+    bayes_binding = ExecutionBinding(
+        bound_id="bayes_linear_v1", kind=BindingKind.LIBRARY,
+        module="model_zoo.examples.models", callable="bayes_linreg_train_and_infer",
+    )
+
+    # Run linear regression
+    lin_req = ModelRunRequest(
+        model_id="linear_regression_v1",
+        inputs={"X": X_ref, "y": y_ref},
+        params={"fit_intercept": True},
         context=ExecutionContext(random_seed=2025),
-        dataset_version="sha256:deadbeef",
-        # In a proper app, ModelZoo would pull binding from a BindingRegistry; for demo we attach it directly:
-        binding=binding,
+        dataset_version="synthetic:v1",
+        binding=lin_binding,
     )
+    def wait_for_result(zoo_obj, run_id: str, actor: str = "you", max_tries: int = 100):
+        import time
+        res = None
+        for _ in range(max_tries):
+            res = zoo_obj.get_run_result(run_id, actor=actor)
+            if not res.metadata.get("in_progress"):
+                return res
+            time.sleep(0.01)
+        return res
 
-    handle = zoo.submit_run(req, actor="you")
-    print("RUN:", handle.run_id, handle.status.value)
-    res = zoo.get_run_result(handle.run_id, actor="you")
-    print("RESULT:", res.status.value, res.predictions.uri if res.predictions else None)
+    lin_handle = zoo.submit_run(lin_req, actor="you")
+    lin_res = wait_for_result(zoo, lin_handle.run_id, actor="you")
+    print("LinearRegression: status=", lin_res.status.value, "diagnostics=", lin_res.diagnostics)
+
+    # Switch to Bayesian linear regression (just swap model_id + binding + params)
+    bayes_req = ModelRunRequest(
+        model_id="bayes_linear_v1",
+        inputs={"X": X_ref, "y": y_ref},
+        params={"sigma": 0.5, "prior_tau": 5.0, "fit_intercept": True},
+        context=ExecutionContext(random_seed=2025),
+        dataset_version="synthetic:v1",
+        binding=bayes_binding,
+    )
+    bayes_handle = zoo.submit_run(bayes_req, actor="you")
+    bayes_res = wait_for_result(zoo, bayes_handle.run_id, actor="you")
+    print("BayesLinear: status=", bayes_res.status.value, "diagnostics=", bayes_res.diagnostics)
 
 if __name__ == "__main__":
     main()
