@@ -120,11 +120,14 @@ class ModelZoo:
                             yt_test = slice_ref(y_true_ref, spec.test_indices)
                             yp_test = slice_ref(res.predictions, spec.test_indices)
                             res.eval_valid = self._compute_metrics_set(spec.metric_ids, yt_test, yp_test, bindings)
-
-                        # Build an R-style summary structure
-                        res.summary = self._build_r_style_summary(run_id, res, spec, y_true_ref)
                 except Exception:
                     self._log.exception("Evaluation failed", extra={"run_id": run_id})
+                finally:
+                    # Always attempt to build a summary, even if metrics failed
+                    try:
+                        res.summary = self._build_r_style_summary(run_id, res, spec, y_true_ref)
+                    except Exception:
+                        self._log.debug("Failed to build summary", exc_info=True)
         return res
 
     def _compute_metrics_set(self, metric_ids: List[str], y_true, y_pred, bindings: Dict[str, Any]) -> Dict[str, float]:
@@ -133,15 +136,25 @@ class ModelZoo:
             b = bindings.get(mid)
             if b is None:
                 continue
-            mc_req = MetricComputeRequest(
-                metric_id=mid,
-                direction=self.metric_registry.get(mid).direction.value,
-                y_true=y_true,
-                y_pred=y_pred,
-                binding=b,
-            )
-            mres = self.metric_runner.compute(mc_req)
-            out[mid] = mres.score
+            # Resolve direction if metric is registered; otherwise default to 'higher_is_better'
+            try:
+                direction = self.metric_registry.get(mid).direction.value
+            except Exception:
+                self._log.warning("Metric id not registered; using default direction", extra={"metric_id": mid})
+                direction = "higher_is_better"
+            try:
+                mc_req = MetricComputeRequest(
+                    metric_id=mid,
+                    direction=direction,
+                    y_true=y_true,
+                    y_pred=y_pred,
+                    binding=b,
+                )
+                mres = self.metric_runner.compute(mc_req)
+                out[mid] = mres.score
+            except Exception:
+                self._log.exception("Metric compute failed", extra={"metric_id": mid})
+                # Continue to next metric
         return out
 
     def _build_r_style_summary(self, run_id: str, res: ModelRunResult, spec: EvaluationSpec, y_true_ref: Any) -> Dict[str, Any]:
