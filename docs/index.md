@@ -10,6 +10,7 @@ This library provides:
 Quick Links
 - README.md for a runnable quick start and usage patterns
 - `bhm_pymc/register_and_run.py` for end-to-end registration + runs + evaluation
+- How‑tos: see docs/howtos.md for step‑by‑step guides
 
 Running the examples
 1) Install base package and optional extras depending on what you want to run.
