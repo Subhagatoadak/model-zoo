@@ -1,0 +1,9 @@
+site_name: model-zoo
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - API: 
+    - Overview: api/index.md
+plugins: []
+theme:
+  name: material
