@@ -10,6 +10,8 @@ from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo.examples.models import make_synthetic_linear
 from model_zoo import r_style_summary_string
 from model_zoo.utils.logging import configure_logging, get_logger
+from model_zoo.examples.sklearn_models import sk_lr_train_and_infer  # noqa: F401 (for binding importability)
+from model_zoo.examples.pymc_models import pymc_linear_nuts  # noqa: F401 (for binding importability)
 from model_zoo.examples import metrics as example_metrics
 from model_zoo.contracts.validation import ParamValidationService
 from model_zoo import DefaultParamValidator
@@ -266,6 +268,51 @@ def main():
         raise
     print("BayesLinear (custom priors): status=", bayes_res2.status.value)
     print(r_style_summary_string(bayes_res2.summary))
+    
+    
+    # ------------------------------------------------------------------
+    # scikit-learn LinearRegression example (if sklearn installed)
+    sk_spec = ModelSpec(
+        model_id="sklearn_linear_v1",
+        name="SklearnLinearRegression",
+        version="1.0.0",
+        kind=ModelKind.LIBRARY,
+        hyperparams=HyperParamSpace(fields={
+            "fit_intercept": HyperParamField("fit_intercept", DType.BOOL, default=True),
+        }),
+        tags=["sklearn", "linear"],
+        metadata={"example": True}
+    )
+    zoo.register_model(sk_spec, actor="you")
+    sk_binding = ExecutionBinding(
+        bound_id="sklearn_linear_v1", kind=BindingKind.LIBRARY,
+        module="model_zoo.examples.sklearn_models", callable="sk_lr_train_and_infer",
+    )
+    sk_req = ModelRunRequest(
+        model_id="sklearn_linear_v1",
+        inputs={"X": X_ref, "y": y_ref},
+        params={"fit_intercept": True, "train_indices": train_idx},
+        binding=sk_binding,
+        context=ExecutionContext(random_seed=2025),
+        evaluation=EvaluationSpec(
+            metric_ids=["r2_v1", "mse_v1"],
+            y_true_key="y",
+            compute_train=True,
+            compute_valid=True,
+            train_indices=train_idx,
+            test_indices=test_idx,
+            bindings={"r2_v1": r2_binding, "mse_v1": mse_binding},
+        ),
+    )
+    try:
+        sk_handle = zoo.submit_run(sk_req, actor="you")
+        sk_res = wait_for_result(zoo, sk_handle.run_id, actor="you")
+        print("SklearnLinear: status=", sk_res.status.value)
+        print(r_style_summary_string(sk_res.summary))
+    except Exception as e:
+        log.warning("Sklearn example skipped: %s", e)
+
+   
 
 if __name__ == "__main__":
     main()
