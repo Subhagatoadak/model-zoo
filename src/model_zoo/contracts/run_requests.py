@@ -1,4 +1,5 @@
 from __future__ import annotations
+"""Run request/result contracts used by runners and the facade."""
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, List
 from enum import Enum
@@ -6,6 +7,16 @@ from .io import DataRef, SecretRef, ExecutionContext
 
 @dataclass
 class EvaluationSpec:
+    """Describe evaluation to compute as part of a run result.
+
+    Attributes:
+        metric_ids: List of metric ids to compute.
+        y_true_key: Which input key contains the ground truth data.
+        y_pred_source: Reserved for future use; which result field to read.
+        compute_train/compute_valid: Whether to compute train/validation splits.
+        train_indices/test_indices: Optional index lists to slice inputs/outputs.
+        bindings: Map of metric_id to binding used to compute it.
+    """
     metric_ids: List[str]
     y_true_key: str = "y"
     y_pred_source: str = "predictions"
@@ -16,6 +27,7 @@ class EvaluationSpec:
     bindings: Dict[str, Any] = field(default_factory=dict)  # metric_id -> ExecutionBinding
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize to a JSON‑serializable dictionary for audit/logging."""
         return {
             "metric_ids": self.metric_ids,
             "y_true_key": self.y_true_key,
@@ -28,6 +40,7 @@ class EvaluationSpec:
         }
 
 class RunStatus(Enum):
+    """Lifecycle states for a model run."""
     QUEUED = "queued"
     STARTED = "started"
     SUCCEEDED = "succeeded"
@@ -36,6 +49,7 @@ class RunStatus(Enum):
 
 @dataclass
 class ModelRunRequest:
+    """Request to execute a model with inputs/params and optional evaluation."""
     model_id: str
     inputs: Dict[str, DataRef]
     params: Dict[str, Any]
@@ -46,6 +60,7 @@ class ModelRunRequest:
     evaluation: Optional[EvaluationSpec] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize to a JSON‑serializable dictionary for audit/logging."""
         return {
             "model_id": self.model_id,
             "inputs": {k: v.to_dict() for k, v in self.inputs.items()},
@@ -60,11 +75,13 @@ class ModelRunRequest:
 
 @dataclass
 class ModelRunHandle:
+    """Lightweight handle returned on submission to track a run."""
     run_id: str
     status: RunStatus
 
 @dataclass
 class ModelRunResult:
+    """Result for a model run (partial or final)."""
     run_id: str
     status: RunStatus
     predictions: Optional[DataRef] = None
@@ -79,6 +96,7 @@ class ModelRunResult:
 
 @dataclass
 class MetricComputeRequest:
+    """Request to compute a metric given references to data."""
     metric_id: str
     direction: str
     y_true: Optional[DataRef] = None
@@ -91,6 +109,7 @@ class MetricComputeRequest:
     binding: Optional[Any] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize request into a JSON‑serializable dictionary."""
         def enc(x): return None if x is None else x.to_dict()
         return {
             "metric_id": self.metric_id, "direction": self.direction,
@@ -103,6 +122,7 @@ class MetricComputeRequest:
 
 @dataclass
 class MetricComputeResult:
+    """Result of a metric computation."""
     score: Optional[float]
     artifacts: Dict[str, DataRef] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)

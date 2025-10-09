@@ -1,4 +1,5 @@
 from __future__ import annotations
+"""High‑level facade that orchestrates registries, runners, and evaluation."""
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 from ..registry.models import ModelRegistry, ModelSpec
@@ -15,6 +16,14 @@ import uuid
 
 @dataclass
 class ModelZoo:
+    """Facade that wires together registries, validation, runners, and audit.
+
+    Responsibilities:
+      - Register models and metrics (pure metadata)
+      - Validate parameters against hyperparameter schemas
+      - Submit runs to the configured `ModelRunner`
+      - Compute evaluation via `MetricRunner` and build R‑style summaries
+    """
     model_registry: ModelRegistry
     metric_registry: MetricRegistry
     model_runner: ModelRunner
@@ -28,6 +37,7 @@ class ModelZoo:
 
     # registries
     def register_model(self, spec: ModelSpec, actor: str = "system") -> None:
+        """Add a model spec to the registry and emit an audit event."""
         try:
             self.model_registry.register(spec)
             self._log.info("Registered model", extra={"model_id": spec.model_id})
@@ -37,6 +47,7 @@ class ModelZoo:
         self._audit("REGISTER_MODEL", actor, spec.model_id, spec.to_dict())
 
     def register_metric(self, spec: EvalMetricSpec, actor: str = "system") -> None:
+        """Add a metric spec to the registry and emit an audit event."""
         try:
             self.metric_registry.register(spec)
             self._log.info("Registered metric", extra={"metric_id": spec.metric_id})
@@ -46,13 +57,16 @@ class ModelZoo:
         self._audit("REGISTER_METRIC", actor, spec.metric_id, spec.to_dict())
 
     def list_models(self) -> List[ModelSpec]:
+        """Return all registered models."""
         return self.model_registry.list()
 
     def list_metrics(self) -> List[EvalMetricSpec]:
+        """Return all registered metrics."""
         return self.metric_registry.list()
 
     # runs
     def submit_run(self, req: ModelRunRequest, actor: str = "system") -> ModelRunHandle:
+        """Validate params, audit submission, and delegate to the model runner."""
         spec = self.model_registry.get(req.model_id)
         self.validator.validate_model_params(spec, req.params)
         # If a binding registry exists, attach binding here (kept outside registries)
@@ -72,6 +86,7 @@ class ModelZoo:
         return handle
 
     def get_run_result(self, run_id: str, actor: str = "system") -> ModelRunResult:
+        """Fetch current/final run result, compute evaluation, and build summary."""
         res = self.model_runner.result(run_id)
         # audit RUN_RESULT only on status change
         if self._result_audits is None:
@@ -215,6 +230,7 @@ class ModelZoo:
         return summary
 
     def compute_metric(self, req: MetricComputeRequest, actor: str = "system") -> MetricComputeResult:
+        """Validate params, audit, and delegate to the metric runner."""
         spec = self.metric_registry.get(req.metric_id)
         self.validator.validate_metric_params(spec, req.params)
         self._audit("METRIC_COMPUTE", actor, req.metric_id, req.to_dict())
