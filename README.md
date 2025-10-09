@@ -144,3 +144,28 @@ Troubleshooting
 See also
 - docs/index.md for architecture and components.
 - The example script `bhm_pymc/register_and_run.py` for a complete, runnable reference.
+
+Build and publish (Artifactory)
+- Build sdist and wheel using Hatch/PEP 517:
+
+```
+python -m pip install --upgrade build twine
+python -m build
+```
+
+- Upload to Artifactory with twine:
+
+```
+export ARTIFACTORY_URL=https://<your-artifactory>/api/pypi/<your-repo>
+export TWINE_USERNAME=<username-or-token>
+export TWINE_PASSWORD=<password-or-token>
+twine upload --repository-url "$ARTIFACTORY_URL" dist/*
+```
+
+- Alternatively, use the helper script:
+
+```
+ARTIFACTORY_URL=https://<your-artifactory>/api/pypi/<your-repo> \
+TWINE_USERNAME=<token> TWINE_PASSWORD=<secret> \
+scripts/publish.sh
+```
