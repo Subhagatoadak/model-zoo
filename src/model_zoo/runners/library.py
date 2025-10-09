@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Optional
 from .base import ModelRunner, MetricRunner
 from ..bindings.base import ExecutionBinding, BindingKind
 from ..contracts.io import DataRef, DataRefType
+from ..stores.run_store import RunStore, RunRecord
 from ..contracts.run_requests import (
     ModelRunRequest,
     ModelRunHandle,
@@ -70,6 +71,7 @@ class LibraryModelRunner(ModelRunner):
         self._lock = Lock()
         self._load = data_loader or _default_load
         self._log = get_logger(__name__)
+        self._run_store: Optional[RunStore] = None
 
     def submit(self, req: ModelRunRequest) -> ModelRunHandle:
         binding = self._require_library_binding(req.binding)
@@ -81,6 +83,9 @@ class LibraryModelRunner(ModelRunner):
 
         future = self._executor.submit(self._execute, run_id, req, binding)
         job.future = future
+        # Save initial record if a store is configured
+        if self._run_store is not None:
+            self._run_store.save(RunRecord(run_id=run_id, result=ModelRunResult(run_id=run_id, status=RunStatus.STARTED, metadata={"in_progress": True}, started_at=job.started_at)))
         return ModelRunHandle(run_id=run_id, status=RunStatus.STARTED)
 
     def status(self, run_id: str) -> RunStatus:
@@ -174,6 +179,8 @@ class LibraryModelRunner(ModelRunner):
             if not job.ended_at:
                 job.ended_at = _now_iso()
             self._log.info("Library run finished", extra={"run_id": run_id, "status": job.status.value})
+            if self._run_store is not None:
+                self._run_store.save(RunRecord(run_id=run_id, result=result))
         except Exception as e:
             job.status = RunStatus.FAILED if not job.cancelled else RunStatus.CANCELLED
             job.result = ModelRunResult(
@@ -186,6 +193,8 @@ class LibraryModelRunner(ModelRunner):
                 ended_at=_now_iso(),
             )
             self._log.exception("Library run failed", extra={"run_id": run_id})
+            if self._run_store is not None:
+                self._run_store.save(RunRecord(run_id=run_id, result=job.result))
 
     def _require_library_binding(self, binding: Optional[ExecutionBinding]) -> ExecutionBinding:
         if binding is None:
@@ -202,6 +211,10 @@ class LibraryModelRunner(ModelRunner):
         if not callable(func):
             raise TypeError(f"Resolved object '{binding.module}.{binding.callable}' is not callable")
         return func
+
+    # Optional wiring helpers
+    def set_run_store(self, store: RunStore) -> None:
+        self._run_store = store
 
 
 class LibraryMetricRunner(MetricRunner):

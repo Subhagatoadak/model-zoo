@@ -20,8 +20,12 @@ from .contracts.audit import AuditLog, AuditEvent
 
 # Bindings & Runners
 from .bindings.base import BindingKind, ExecutionBinding
+from .bindings.registry import BindingRegistry, InMemoryBindingRegistry
 from .bindings.mcp import MCPBindingOptions
 from .runners.base import ModelRunner, MetricRunner
 from .utils.summary import r_style_summary_string
+from .selection.selector import ModelSelectionService
+from .io.loaders import DefaultDataLoader
+from .stores.run_store import RunStore, InMemoryRunStore
 
 __all__ = [n for n in dir() if not n.startswith("_")]

@@ -70,6 +70,11 @@ class ModelZoo:
         spec = self.model_registry.get(req.model_id)
         self.validator.validate_model_params(spec, req.params)
         # If a binding registry exists, attach binding here (kept outside registries)
+        if req.binding is None and self.binding_registry is not None:
+            try:
+                req.binding = self.binding_registry.get_model_binding(req.model_id)
+            except Exception:
+                req.binding = None
         self._audit("RUN_SUBMIT", actor, req.model_id, req.to_dict())
         trace_id = str(uuid.uuid4())
         self._log.info("Submitting run", extra={"model_id": req.model_id, "trace_id": trace_id})
