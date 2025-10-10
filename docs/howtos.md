@@ -119,6 +119,58 @@ handle = zoo.submit_run(req)
 
 ## Deploy to Orchestrators
 
+## Configure Hyperparameters via Tables (Master + Engine)
+
+Goal: Define hyperparameters and values using two simple tables (e.g., CSVs/DB rows).
+
+1) Master config table (schema) → HyperParamSpace
+
+Expected columns per row (case-insensitive):
+- `name` (param name), `dtype` (int|float|bool|string|object|array), `required` (bool), `default` (any)
+- Optional: `description`, `min`, `max`, `enum` (comma-separated), `pattern`, `example`
+
+Example (Markdown table):
+
+| name          | dtype  | required | default | description        |
+|---------------|--------|----------|---------|--------------------|
+| fit_intercept | bool   | false    | true    | Include intercept  |
+| feature_name  | string | false    | X       | Name for coef row  |
+
+Build the space:
+
+```
+from model_zoo.utils.config_tables import hyperparam_space_from_master
+hp_space = hyperparam_space_from_master(master_rows)
+```
+
+2) Engine config table (values) → params dict
+
+Expected columns per row: `model_id`, `param`, `value`, optional `env`.
+Values are coerced to the dtype in the master space (booleans, ints, floats, comma-separated arrays).
+
+Example:
+
+| model_id            | param         | value | env |
+|---------------------|---------------|-------|-----|
+| linreg_tabular_v1   | fit_intercept | true  | dev |
+| linreg_tabular_v1   | feature_name  | X     | dev |
+
+Build the params:
+
+```
+from model_zoo.utils.config_tables import params_from_engine
+params = params_from_engine(engine_rows, model_id="linreg_tabular_v1", master=hp_space, env="dev")
+```
+
+3) Use in ModelSpec and ModelRunRequest
+
+```
+spec = ModelSpec(model_id="linreg_tabular_v1", name="LinReg", version="1.0.0", kind=ModelKind.LIBRARY, hyperparams=hp_space)
+req = ModelRunRequest(model_id="linreg_tabular_v1", inputs=..., params=params, evaluation=...)
+```
+
+See also: `bhm_pymc/config_table_example.py`.
+
 Goal: Execute long‑running training/inference jobs on systems like Prefect, Flyte, or Airflow.
 
 1) Implement a Pipeline runner
@@ -142,4 +194,3 @@ Goal: Execute long‑running training/inference jobs on systems like Prefect, Fl
 
 - Export run metrics to Prometheus/OTel.
 - Forward orchestrator links/logs in `ModelRunResult.metadata`.
-
