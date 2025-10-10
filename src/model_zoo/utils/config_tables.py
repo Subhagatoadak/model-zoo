@@ -9,6 +9,7 @@ This module avoids heavy dependencies and accepts tables as lists of dicts. You
 can add small CSV readers on top of these helpers if needed.
 """
 from typing import Any, Dict, List, Optional
+import json
 from ..contracts.hyperparams import HyperParamField, HyperParamSpace, DType
 
 
@@ -131,8 +132,27 @@ def params_from_engine(
                 raise ValueError(f"Cannot parse float for {name}: {val}")
         # Lists via comma-separated
         if dt == DType.LIST and isinstance(val, str):
-            return [v.strip() for v in val.split(",") if v.strip()]
-        # Dicts left as-is (expect JSON-like value if coming from CSV)
+            s = val.strip()
+            # Try JSON array first
+            if s.startswith("[") and s.endswith("]"):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, list):
+                        return parsed
+                except Exception:
+                    pass
+            # Fallback: comma-separated list
+            return [v.strip() for v in s.split(",") if v.strip()]
+        # Dicts: parse JSON object if string
+        if dt == DType.DICT and isinstance(val, str):
+            s = val.strip()
+            if s.startswith("{") and s.endswith("}"):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
         return val
 
     for row in engine_rows:
@@ -146,4 +166,3 @@ def params_from_engine(
             continue
         params[pname] = coerce(pname, row.get("value"))
     return params
-

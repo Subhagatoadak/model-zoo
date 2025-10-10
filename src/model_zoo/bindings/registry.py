@@ -5,6 +5,7 @@ This keeps bindings outside registries. Applications can implement their own
 source (DB/config) by subclassing `BindingRegistry`.
 """
 from typing import Optional, Dict, Any
+from threading import Lock
 
 
 class BindingRegistry:
@@ -28,19 +29,24 @@ class InMemoryBindingRegistry(BindingRegistry):
     def __init__(self) -> None:
         self._model_bindings: Dict[str, Any] = {}
         self._metric_bindings: Dict[str, Any] = {}
+        self._lock = Lock()
 
     def register_model_binding(self, model_id: str, binding: Any) -> None:
         """Register or replace the binding for a given model_id."""
-        self._model_bindings[model_id] = binding
+        with self._lock:
+            self._model_bindings[model_id] = binding
 
     def register_metric_binding(self, metric_id: str, binding: Any) -> None:
         """Register or replace the binding for a given metric_id."""
-        self._metric_bindings[metric_id] = binding
+        with self._lock:
+            self._metric_bindings[metric_id] = binding
 
     def get_model_binding(self, model_id: str) -> Optional[Any]:
         """Return the binding registered for model_id, if any."""
-        return self._model_bindings.get(model_id)
+        with self._lock:
+            return self._model_bindings.get(model_id)
 
     def get_metric_binding(self, metric_id: str) -> Optional[Any]:
         """Return the binding registered for metric_id, if any."""
-        return self._metric_bindings.get(metric_id)
+        with self._lock:
+            return self._metric_bindings.get(metric_id)

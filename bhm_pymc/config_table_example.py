@@ -17,7 +17,7 @@ from model_zoo import (
     ExecutionBinding, BindingKind,
     DataRef, DataRefType, ExecutionContext,
     ModelRunRequest, EvaluationSpec,
-    InMemoryBindingRegistry, InMemoryRunStore, r_style_summary_string,
+    InMemoryBindingRegistry, InMemoryRunStore, InMemoryEventBus, r_style_summary_string,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo import DefaultParamValidator
@@ -29,7 +29,12 @@ from model_zoo.examples.models import linreg_train_and_infer  # noqa: F401
 from model_zoo.examples import metrics as example_metrics  # noqa: F401
 
 
-def main():
+def main(env: str = "dev"):
+    """Demonstrate master/engine config tables for HyperParamSpace and params.
+
+    Includes BindingRegistry resolve, inline evaluation, event bus, and a
+    timeout in ExecutionContext. The `env` parameter selects engine rows.
+    """
     configure_logging("INFO")
 
     # 1) Define tabular configs (could be loaded from CSV/DB)
@@ -43,15 +48,22 @@ def main():
     ]
 
     # 2) Build HyperParamSpace and params from tables
-    hp_space = hyperparam_space_from_master(master_rows)
-    params = params_from_engine(engine_rows, model_id="linreg_tabular_v1", master=hp_space, env="dev")
+    try:
+        hp_space = hyperparam_space_from_master(master_rows)
+        params = params_from_engine(engine_rows, model_id="linreg_tabular_v1", master=hp_space, env=env)
+    except Exception as e:
+        print("[ERROR] invalid config tables:", e)
+        return
 
     # 3) Wire Model Zoo
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
-    runner = LibraryModelRunner()
+    runner = LibraryModelRunner(max_workers=2, max_active_runs=1, max_retries=0, backoff_initial_s=0.2)
     runner.set_run_store(InMemoryRunStore())
     bind_reg = InMemoryBindingRegistry()
-    zoo = ModelZoo(model_reg, metric_reg, runner, LibraryMetricRunner(), DefaultParamValidator(), binding_registry=bind_reg)
+    bus = InMemoryEventBus()
+    bus.subscribe("run.status_changed", lambda ev: print("[EVENT] status:", ev.get("status"), ev.get("run_id")))
+    bus.subscribe("run.evaluated", lambda ev: print("[EVENT] evaluated:", ev.get("run_id")))
+    zoo = ModelZoo(model_reg, metric_reg, runner, LibraryMetricRunner(), DefaultParamValidator(), binding_registry=bind_reg, event_bus=bus)
 
     # 4) Register model + metrics
     model_spec = ModelSpec(
@@ -96,15 +108,18 @@ def main():
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"], y_true_key="y",
             train_indices=train_idx, test_indices=test_idx,
-            bindings={"r2_v1": r2_binding, "mse_v1": mse_binding},
         ),
+        context=ExecutionContext(timeout_s=60),
     )
-    h = zoo.submit_run(req)
-    res = zoo.get_run_result(h.run_id)
+    try:
+        h = zoo.submit_run(req)
+        res = zoo.get_run_result(h.run_id)
+    except Exception as e:
+        print("[ERROR] run failed:", e)
+        return
     print("Tabular-config LinReg status:", res.status.value)
     print(r_style_summary_string(res.summary))
 
 
 if __name__ == "__main__":
     main()
-

@@ -180,6 +180,9 @@ class ModelZoo:
                 res.summary = self._build_r_style_summary(run_id, res, None, y_true_ref)
             except Exception:
                 self._log.debug("Failed to build minimal summary", exc_info=True)
+        # Cleanup eval spec memory for terminal runs
+        if res.status.name in ("SUCCEEDED", "FAILED", "CANCELLED") and getattr(self, "_eval_specs", None):
+            self._eval_specs.pop(run_id, None)
         return res
 
     def _compute_metrics_set(self, metric_ids: List[str], y_true, y_pred, bindings: Dict[str, Any]) -> Dict[str, float]:

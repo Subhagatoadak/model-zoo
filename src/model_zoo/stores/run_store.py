@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional
 from ..contracts.run_requests import ModelRunResult
+from threading import Lock
 
 
 @dataclass
@@ -27,11 +28,14 @@ class RunStore:
 class InMemoryRunStore(RunStore):
     def __init__(self) -> None:
         self._recs: Dict[str, RunRecord] = {}
+        self._lock = Lock()
 
     def save(self, rec: RunRecord) -> None:
         """Store the run record in memory, replacing any existing one."""
-        self._recs[rec.run_id] = rec
+        with self._lock:
+            self._recs[rec.run_id] = rec
 
     def get(self, run_id: str) -> Optional[RunRecord]:
         """Return a previously saved RunRecord, if present."""
-        return self._recs.get(run_id)
+        with self._lock:
+            return self._recs.get(run_id)

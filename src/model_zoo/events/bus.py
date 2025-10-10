@@ -5,6 +5,7 @@ Used to notify external agents or listeners of run submissions, status changes,
 and evaluation completions. Default is in-memory (no-op listener storage).
 """
 from typing import Any, Dict, List, Optional, Callable
+from threading import Lock
 
 
 class EventBus:
@@ -20,14 +21,18 @@ class InMemoryEventBus(EventBus):
 
     def __init__(self) -> None:
         self._listeners: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
+        self._lock = Lock()
 
     def subscribe(self, topic: str, fn: Callable[[Dict[str, Any]], None]) -> None:
         """Register a callback to be invoked when `topic` is published."""
-        self._listeners.setdefault(topic, []).append(fn)
+        with self._lock:
+            self._listeners.setdefault(topic, []).append(fn)
 
     def publish(self, topic: str, payload: Dict[str, Any]) -> None:
         """Invoke all listeners for `topic` with `payload` (best‑effort)."""
-        for fn in self._listeners.get(topic, []):
+        with self._lock:
+            listeners = list(self._listeners.get(topic, []))
+        for fn in listeners:
             try:
                 fn(payload)
             except Exception:

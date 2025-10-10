@@ -130,6 +130,9 @@ class LibraryModelRunner(ModelRunner):
         if job.status in (RunStatus.QUEUED, RunStatus.STARTED):
             job.status = RunStatus.CANCELLED
             job.ended_at = _now_iso()
+            # Persist cancellation
+            if self._run_store is not None:
+                self._run_store.save(RunRecord(run_id=run_id, result=ModelRunResult(run_id=run_id, status=job.status, started_at=job.started_at, ended_at=job.ended_at, metadata={"cancelled": True})))
 
     # Internal helpers
     def _execute(self, run_id: str, req: ModelRunRequest, binding: ExecutionBinding) -> None:
