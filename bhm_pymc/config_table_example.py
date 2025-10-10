@@ -22,6 +22,7 @@ from model_zoo import (
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo import DefaultParamValidator
 from model_zoo.utils.logging import configure_logging
+import argparse
 from model_zoo.utils.config_tables import hyperparam_space_from_master, params_from_engine
 
 # Ensure binding target is importable
@@ -29,7 +30,7 @@ from model_zoo.examples.models import linreg_train_and_infer  # noqa: F401
 from model_zoo.examples import metrics as example_metrics  # noqa: F401
 
 
-def main(env: str = "dev"):
+def main(env: str = "dev", model_id: str = "linreg_tabular_v1"):
     """Demonstrate master/engine config tables for HyperParamSpace and params.
 
     Includes BindingRegistry resolve, inline evaluation, event bus, and a
@@ -43,14 +44,14 @@ def main(env: str = "dev"):
         {"name": "feature_name",  "dtype": "string", "required": False, "default": "X", "description": "Name for coefficient"},
     ]
     engine_rows = [
-        {"model_id": "linreg_tabular_v1", "param": "fit_intercept", "value": "true", "env": "dev"},
-        {"model_id": "linreg_tabular_v1", "param": "feature_name",  "value": "X",    "env": "dev"},
+        {"model_id": model_id, "param": "fit_intercept", "value": "true", "env": env},
+        {"model_id": model_id, "param": "feature_name",  "value": "X",    "env": env},
     ]
 
     # 2) Build HyperParamSpace and params from tables
     try:
         hp_space = hyperparam_space_from_master(master_rows)
-        params = params_from_engine(engine_rows, model_id="linreg_tabular_v1", master=hp_space, env=env)
+        params = params_from_engine(engine_rows, model_id=model_id, master=hp_space, env=env)
     except Exception as e:
         print("[ERROR] invalid config tables:", e)
         return
@@ -67,7 +68,7 @@ def main(env: str = "dev"):
 
     # 4) Register model + metrics
     model_spec = ModelSpec(
-        model_id="linreg_tabular_v1",
+        model_id=model_id,
         name="LinearRegression_TabularConfig",
         version="1.0.0",
         kind=ModelKind.LIBRARY,
@@ -82,12 +83,12 @@ def main(env: str = "dev"):
 
     # 5) Bindings
     model_binding = ExecutionBinding(
-        bound_id="linreg_tabular_v1", kind=BindingKind.LIBRARY,
+        bound_id=model_id, kind=BindingKind.LIBRARY,
         module="model_zoo.examples.models", callable="linreg_train_and_infer",
     )
     r2_binding = ExecutionBinding("r2_v1", BindingKind.LIBRARY, module="model_zoo.examples.metrics", callable="r2_score")
     mse_binding = ExecutionBinding("mse_v1", BindingKind.LIBRARY, module="model_zoo.examples.metrics", callable="mse")
-    bind_reg.register_model_binding("linreg_tabular_v1", model_binding)
+    bind_reg.register_model_binding(model_id, model_binding)
     bind_reg.register_metric_binding("r2_v1", r2_binding)
     bind_reg.register_metric_binding("mse_v1", mse_binding)
 
@@ -102,7 +103,7 @@ def main(env: str = "dev"):
 
     # 7) Submit run using params from engine table
     req = ModelRunRequest(
-        model_id="linreg_tabular_v1",
+        model_id=model_id,
         inputs={"X": X_ref, "y": y_ref},
         params=params,
         evaluation=EvaluationSpec(
@@ -122,4 +123,8 @@ def main(env: str = "dev"):
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Tabular-config Model Zoo example")
+    parser.add_argument("--env", default="dev", help="Engine table environment key (default: dev)")
+    parser.add_argument("--model-id", default="linreg_tabular_v1", help="Target model_id (default: linreg_tabular_v1)")
+    args = parser.parse_args()
+    main(env=args.env, model_id=args.model_id)

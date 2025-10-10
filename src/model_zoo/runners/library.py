@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import import_module
 from threading import Lock, Semaphore
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple, Type
 
 from .base import ModelRunner, MetricRunner
 from ..bindings.base import ExecutionBinding, BindingKind
@@ -73,6 +73,8 @@ class LibraryModelRunner(ModelRunner):
         max_active_runs: Optional[int] = None,
         max_retries: int = 0,
         backoff_initial_s: float = 0.1,
+        retry_on: Optional[Tuple[Type[BaseException], ...]] = None,
+        permanent_on: Optional[Tuple[Type[BaseException], ...]] = None,
     ) -> None:
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="mz-lib-runner")
         self._jobs: Dict[str, _Job] = {}
@@ -83,6 +85,10 @@ class LibraryModelRunner(ModelRunner):
         self._sema = Semaphore(max_active_runs or max_workers)
         self._max_retries = max(0, int(max_retries))
         self._backoff_initial_s = max(0.0, float(backoff_initial_s))
+        # Retry policy: by default retry on generic Exception (excluding Timeout which is handled) and
+        # treat common coding errors as permanent (ValueError/TypeError) to avoid useless retries.
+        self._retry_on: Tuple[Type[BaseException], ...] = retry_on or (Exception,)
+        self._permanent_on: Tuple[Type[BaseException], ...] = permanent_on or (ValueError, TypeError)
 
     def submit(self, req: ModelRunRequest) -> ModelRunHandle:
         binding = self._require_library_binding(req.binding)
@@ -168,7 +174,9 @@ class LibraryModelRunner(ModelRunner):
                     self._log.warning("Run timed out", extra={"run_id": run_id})
                     return
                 except Exception as e:
-                    if job.cancelled or attempts > self._max_retries:
+                    # Decide if this exception is retryable
+                    retryable = isinstance(e, self._retry_on) and not isinstance(e, self._permanent_on)
+                    if job.cancelled or attempts > self._max_retries or not retryable:
                         raise
                     import time as _time
                     _time.sleep(self._backoff_initial_s * attempts)
