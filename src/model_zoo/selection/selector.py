@@ -1,10 +1,10 @@
-from __future__ import annotations
 """Simple model selection service for agents.
 
 This is a minimal baseline that filters by kind/tags and optional metadata
 constraints, then returns a deterministic choice (latest version by string).
 Applications can replace this with a more sophisticated selector.
 """
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional
 from ..registry.models import ModelRegistry, ModelSpec, ModelKind

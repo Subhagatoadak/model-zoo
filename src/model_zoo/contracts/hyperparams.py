@@ -1,5 +1,5 @@
-from __future__ import annotations
 """Hyperparameter schema primitives used by registries and validators."""
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from enum import Enum

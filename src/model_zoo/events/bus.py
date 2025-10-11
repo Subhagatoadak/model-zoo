@@ -1,9 +1,9 @@
-from __future__ import annotations
 """Event bus interfaces for run lifecycle notifications.
 
 Used to notify external agents or listeners of run submissions, status changes,
 and evaluation completions. Default is in-memory (no-op listener storage).
 """
+from __future__ import annotations
 from typing import Any, Dict, List, Optional, Callable
 from threading import Lock
 

@@ -1,5 +1,5 @@
-from __future__ import annotations
 """I/O data contracts used by run requests and results."""
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 from enum import Enum

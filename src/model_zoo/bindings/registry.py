@@ -1,9 +1,9 @@
-from __future__ import annotations
 """Binding registry for resolving execution bindings by id.
 
 This keeps bindings outside registries. Applications can implement their own
 source (DB/config) by subclassing `BindingRegistry`.
 """
+from __future__ import annotations
 from typing import Optional, Dict, Any
 from threading import Lock
 

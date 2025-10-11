@@ -1,9 +1,9 @@
-from __future__ import annotations
 """Parameter validation service interface.
 
 Provide concrete implementations to enforce HyperParamSpace constraints for
 models and metrics before execution.
 """
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Dict
 from ..registry.models import ModelSpec

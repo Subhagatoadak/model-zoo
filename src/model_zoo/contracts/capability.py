@@ -1,5 +1,5 @@
-from __future__ import annotations
 """Capability/requirement contracts and a placeholder compatibility service."""
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 

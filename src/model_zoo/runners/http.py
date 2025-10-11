@@ -1,10 +1,10 @@
-from __future__ import annotations
 """HTTP-based runners (submit/compute via API endpoints).
 
 These are conventional implementations: submit via POST, then poll or fetch
 results via GET endpoints. Integrate with a BindingRegistry to manage
 endpoints per model/metric.
 """
+from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 

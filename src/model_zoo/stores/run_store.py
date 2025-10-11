@@ -1,5 +1,5 @@
-from __future__ import annotations
 """Run store interfaces and an in-memory implementation."""
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional
 from ..contracts.run_requests import ModelRunResult

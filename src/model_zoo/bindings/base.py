@@ -1,4 +1,3 @@
-from __future__ import annotations
 """Binding primitives that describe how to execute models and metrics.
 
 Bindings are kept separate from registries and attached at request time (or
@@ -6,6 +5,7 @@ resolved via a BindingRegistry). They encode transport details such as
 module/callable for in‑process execution, HTTP endpoints, pipeline IDs, or MCP
 options.
 """
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 from enum import Enum

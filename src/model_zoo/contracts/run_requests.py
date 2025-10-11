@@ -1,5 +1,5 @@
-from __future__ import annotations
 """Run request/result contracts used by runners and the facade."""
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, List
 from enum import Enum

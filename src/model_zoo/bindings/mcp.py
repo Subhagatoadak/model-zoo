@@ -1,5 +1,5 @@
-from __future__ import annotations
 """Options for invoking models via Model Context Protocol (MCP)."""
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 

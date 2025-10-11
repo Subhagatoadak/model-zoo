@@ -32,6 +32,10 @@ from .utils.summary import r_style_summary_string
 from .selection.selector import ModelSelectionService
 from .io.loaders import DefaultDataLoader
 from .stores.run_store import RunStore, InMemoryRunStore
-from .events.bus import EventBus, InMemoryEventBus, WebhookEventBus
+from .events.bus import (
+    EventBus,
+    InMemoryEventBus,
+    WebhookEventBus,
+)
 
 __all__ = [n for n in dir() if not n.startswith("_")]

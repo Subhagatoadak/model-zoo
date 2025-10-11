@@ -1,5 +1,5 @@
-from __future__ import annotations
 """Example metric callables for in‑process evaluation via LibraryMetricRunner."""
+from __future__ import annotations
 from typing import Iterable, Optional, Dict, Any
 
 

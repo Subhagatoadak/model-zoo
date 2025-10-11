@@ -1,5 +1,5 @@
-from __future__ import annotations
 """Utilities to render a compact, R‑style summary from run results."""
+from __future__ import annotations
 from typing import Dict, Any
 
 def r_style_summary_string(summary: Dict[str, Any]) -> str:

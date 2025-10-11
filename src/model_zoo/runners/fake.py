@@ -1,5 +1,5 @@
-from __future__ import annotations
 """Minimal fake runners for demos/tests (synchronous completion)."""
+from __future__ import annotations
 from datetime import datetime, timezone
 from ..contracts.run_requests import (
     ModelRunRequest, ModelRunHandle, ModelRunResult, RunStatus,
