@@ -1,15 +1,16 @@
-"""
-Tabular Hyperparameter Configuration Example (Master + Engine Tables)
+"""Tabular Hyperparameter Configuration Example (Master + Engine Tables).
 
-This example shows how to define a HyperParamSpace and run parameters using
-two simple configuration tables:
- - Master config table: defines parameter schemas (name, dtype, required, default).
- - Engine config table: provides per-model parameter values (e.g., per env).
+This example shows how to define a HyperParamSpace and run parameters using two
+simple configuration tables:
+- Master config table: defines parameter schemas (name, dtype, required, default).
+- Engine config table: provides per-model parameter values (e.g., per env).
 
-We use the in-process OLS model (`linreg_train_and_infer`) and demonstrate
-BindingRegistry + inline evaluation and an R-style summary.
+We use the in-process OLS model and demonstrate BindingRegistry, inline
+evaluation and an R-style summary.
 """
 from __future__ import annotations
+
+import argparse
 
 from model_zoo import (
     ModelZoo, ModelRegistry, MetricRegistry,
@@ -17,7 +18,8 @@ from model_zoo import (
     ExecutionBinding, BindingKind,
     DataRef, DataRefType, ExecutionContext,
     ModelRunRequest, EvaluationSpec,
-    InMemoryBindingRegistry, InMemoryRunStore, InMemoryEventBus, r_style_summary_string,
+    InMemoryBindingRegistry, InMemoryRunStore, InMemoryEventBus,
+    r_style_summary_string,
 )
 from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
 from model_zoo import DefaultParamValidator
@@ -26,8 +28,7 @@ import argparse
 from model_zoo.utils.config_tables import hyperparam_space_from_master, params_from_engine
 
 # Ensure binding target is importable
-from model_zoo.examples.models import linreg_train_and_infer  # noqa: F401
-from model_zoo.examples import metrics as example_metrics  # noqa: F401
+# Bindings resolve by module/callable strings; no direct imports needed here.
 
 
 def main(env: str = "dev", model_id: str = "linreg_tabular_v1"):
@@ -40,8 +41,20 @@ def main(env: str = "dev", model_id: str = "linreg_tabular_v1"):
 
     # 1) Define tabular configs (could be loaded from CSV/DB)
     master_rows = [
-        {"name": "fit_intercept", "dtype": "bool", "required": False, "default": True, "description": "Include intercept"},
-        {"name": "feature_name",  "dtype": "string", "required": False, "default": "X", "description": "Name for coefficient"},
+        {
+            "name": "fit_intercept",
+            "dtype": "bool",
+            "required": False,
+            "default": True,
+            "description": "Include intercept",
+        },
+        {
+            "name": "feature_name",
+            "dtype": "string",
+            "required": False,
+            "default": "X",
+            "description": "Name for coefficient",
+        },
     ]
     engine_rows = [
         {"model_id": model_id, "param": "fit_intercept", "value": "true", "env": env},
@@ -58,7 +71,12 @@ def main(env: str = "dev", model_id: str = "linreg_tabular_v1"):
 
     # 3) Wire Model Zoo
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
-    runner = LibraryModelRunner(max_workers=2, max_active_runs=1, max_retries=0, backoff_initial_s=0.2)
+    runner = LibraryModelRunner(
+        max_workers=2,
+        max_active_runs=1,
+        max_retries=0,
+        backoff_initial_s=0.2,
+    )
     runner.set_run_store(InMemoryRunStore())
     bind_reg = InMemoryBindingRegistry()
     bus = InMemoryEventBus()
@@ -93,18 +111,18 @@ def main(env: str = "dev", model_id: str = "linreg_tabular_v1"):
     bind_reg.register_metric_binding("mse_v1", mse_binding)
 
     # 6) Simple synthetic data
-    X = [i / 10 for i in range(1, 101)]
-    y = [1.0 + 2.0 * x for x in X]
-    X_ref = DataRef(DataRefType.INLINE, inline=X)
-    y_ref = DataRef(DataRefType.INLINE, inline=y)
+    x_vals = [i / 10 for i in range(1, 101)]
+    y_vals = [1.0 + 2.0 * x for x in x_vals]
+    x_ref = DataRef(DataRefType.INLINE, inline=x_vals)
+    y_ref = DataRef(DataRefType.INLINE, inline=y_vals)
     split = 80
     train_idx = list(range(split))
-    test_idx = list(range(split, len(X)))
+    test_idx = list(range(split, len(x_vals)))
 
     # 7) Submit run using params from engine table
     req = ModelRunRequest(
         model_id=model_id,
-        inputs={"X": X_ref, "y": y_ref},
+        inputs={"X": x_ref, "y": y_ref},
         params=params,
         evaluation=EvaluationSpec(
             metric_ids=["r2_v1", "mse_v1"], y_true_key="y",
@@ -112,19 +130,25 @@ def main(env: str = "dev", model_id: str = "linreg_tabular_v1"):
         ),
         context=ExecutionContext(timeout_s=60),
     )
-    try:
-        h = zoo.submit_run(req)
-        res = zoo.get_run_result(h.run_id)
-    except Exception as e:
-        print("[ERROR] run failed:", e)
-        return
+    h = zoo.submit_run(req)
+    res = zoo.get_run_result(h.run_id)
     print("Tabular-config LinReg status:", res.status.value)
     print(r_style_summary_string(res.summary))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Tabular-config Model Zoo example")
-    parser.add_argument("--env", default="dev", help="Engine table environment key (default: dev)")
-    parser.add_argument("--model-id", default="linreg_tabular_v1", help="Target model_id (default: linreg_tabular_v1)")
+    parser = argparse.ArgumentParser(
+        description="Tabular-config Model Zoo example"
+    )
+    parser.add_argument(
+        "--env",
+        default="dev",
+        help="Engine table environment key (default: dev)",
+    )
+    parser.add_argument(
+        "--model-id",
+        default="linreg_tabular_v1",
+        help="Target model_id (default: linreg_tabular_v1)",
+    )
     args = parser.parse_args()
     main(env=args.env, model_id=args.model_id)
