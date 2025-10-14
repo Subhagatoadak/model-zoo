@@ -118,7 +118,7 @@ Library examples provided
 - OLS: `model_zoo.examples.models.linreg_train_and_infer`
 - Conjugate Bayesian (Normal/Gamma): `model_zoo.examples.models.bayes_linreg_train_and_infer`
 - sklearn LinearRegression: `model_zoo.examples.sklearn_models.sk_lr_train_and_infer`
-- PyMC NUTS (single/multi‑feature): `model_zoo.examples.pymc_models.pymc_linear_nuts`
+ - PyMC NUTS (single/multi‑feature): `model_zoo.examples.pymc_models.pymc_linear_nuts`
 
 Priors (Bayesian)
 - Conjugate demo:
@@ -144,6 +144,7 @@ Troubleshooting
 See also
 - docs/index.md for architecture and components.
 - The example script `bhm_pymc/register_and_run.py` for a complete, runnable reference.
+- docs/registry_api.md for running the FastAPI registry service with Docker.
 
 Build and publish (Artifactory)
 - Build sdist and wheel using Hatch/PEP 517:
