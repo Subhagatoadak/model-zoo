@@ -1,0 +1,56 @@
+{
+  "model": {
+    "id": "bayes_linear_v1",
+    "name": "Bayesian Linear Regression (Config)",
+    "version": "1.0.0",
+    "kind": "library",
+    "binding": {
+      "module": "model_zoo.examples.models",
+      "callable": "bayes_linreg_train_and_infer"
+    },
+    "inputs": ["X", "y"]
+  },
+  "hyperparameters": {
+    "schema": [
+      {"name": "sigma", "dtype": "float", "required": true, "default": 1.0},
+      {"name": "prior_mu", "dtype": "float", "default": 0.0},
+      {"name": "prior_tau", "dtype": "float", "default": 10.0},
+      {"name": "fit_intercept", "dtype": "bool", "default": true},
+      {"name": "draws", "dtype": "int", "default": 0},
+      {"name": "tune", "dtype": "int", "default": 0},
+      {"name": "priors", "dtype": "dict", "default": null}
+    ],
+    "values": [
+      {"model_id": "bayes_linear_v1", "param": "sigma", "value": 0.5, "env": "dev"},
+      {"model_id": "bayes_linear_v1", "param": "prior_tau", "value": 5.0, "env": "dev"},
+      {"model_id": "bayes_linear_v1", "param": "fit_intercept", "value": "true", "env": "dev"},
+      {"model_id": "bayes_linear_v1", "param": "draws", "value": 100, "env": "dev"},
+      {"model_id": "bayes_linear_v1", "param": "tune", "value": 50, "env": "dev"}
+    ]
+  },
+  "variables": {
+    "definitions": [
+      {"name": "feature_raw", "source": "x_values"},
+      {
+        "name": "X",
+        "source": "feature_raw",
+        "transforms": [
+          {
+            "id": "standardize"
+          }
+        ]
+      },
+      {"name": "y", "source": "y_values"}
+    ],
+    "groups": []
+  },
+  "evaluation": {
+    "metric_ids": ["r2_v1", "mse_v1"],
+    "y_true_key": "y",
+    "compute_train": true,
+    "compute_valid": true
+  },
+  "context": {
+    "timeout_s": 120
+  }
+}

@@ -1,530 +1,219 @@
+"""Config-driven registration and execution example for linear models."""
+from __future__ import annotations
+
+import argparse
+from typing import Any, Dict, List, Tuple
+
 from model_zoo import (
-    ModelZoo, ModelRegistry, MetricRegistry,
-    ModelSpec, ModelKind, EvalMetricSpec, MetricKind, MetricDirection,
-    HyperParamSpace, HyperParamField, DType,
-    ExecutionBinding, BindingKind,
-    DataRef, DataRefType, ExecutionContext,
-    ModelRunRequest, MetricComputeRequest, EvaluationSpec,
-    InMemoryBindingRegistry, InMemoryRunStore,
+    ModelZoo,
+    ModelRegistry,
+    MetricRegistry,
+    ModelSpec,
+    ModelKind,
+    EvalMetricSpec,
+    MetricKind,
+    MetricDirection,
+    ExecutionBinding,
+    BindingKind,
+    DataRef,
+    DataRefType,
+    ExecutionContext,
+    ModelRunRequest,
+    EvaluationSpec,
+    InMemoryBindingRegistry,
     InMemoryEventBus,
+    r_style_summary_string,
+    DefaultParamValidator,
 )
-from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
-from model_zoo.examples.models import make_synthetic_linear, make_synthetic_mtcars_wt_mpg, make_synthetic_mtcars_multi
-from model_zoo import r_style_summary_string
-from model_zoo.utils.logging import configure_logging, get_logger, quiet_third_party_loggers
-from model_zoo.examples.sklearn_models import sk_lr_train_and_infer  # noqa: F401 (for binding importability)
-from model_zoo.examples.pymc_models import pymc_linear_nuts  # noqa: F401 (for binding importability)
-from model_zoo.examples import metrics as example_metrics
-from model_zoo.contracts.validation import ParamValidationService
-from model_zoo import DefaultParamValidator
 from model_zoo.contracts.audit import AuditLog, AuditEvent
+from model_zoo.runners.library import LibraryModelRunner, LibraryMetricRunner
+from model_zoo.stores.run_store import PostgresRunStore
+from model_zoo.utils.config_loader import load_model_configuration, ModelConfiguration
+from model_zoo.utils.variable_processing import build_variables
+from model_zoo.utils.env import read_env_file, build_postgres_dsn
+from model_zoo.utils.logging import configure_logging, quiet_third_party_loggers, get_logger
+from model_zoo.examples.models import make_synthetic_linear
+
 
 class PrintAudit(AuditLog):
     def append(self, event: AuditEvent) -> None:
         print(f"[AUDIT] {event.kind} ref={event.ref_id}")
 
-def main():
-    """Register models/metrics, wire binding registry, submit example runs, and print summaries.
 
-    Demonstrates:
-    - BindingRegistry for model/metric bindings
-    - InMemoryRunStore for simple persistence
-    - EventBus for status/evaluation notifications
-    - Timeouts, retries, and concurrency controls in the Library runner
-    """
-    configure_logging("INFO")
-    quiet_third_party_loggers()
-    log = get_logger(__name__)
-    log.info("Starting example run")
+def configure_zoo(dsn: str, table: str) -> Tuple[ModelZoo, InMemoryBindingRegistry]:
     model_reg, metric_reg = ModelRegistry(), MetricRegistry()
-    # Configure runner with an in-memory store; attach binding registry to Zoo
-    # Configure model runner with concurrency + retry policy
+    run_store = PostgresRunStore(dsn=dsn, table_name=table)
     model_runner = LibraryModelRunner(max_workers=4, max_active_runs=2, max_retries=1, backoff_initial_s=0.2)
-    model_runner.set_run_store(InMemoryRunStore())
+    model_runner.set_run_store(run_store)
+    metric_runner = LibraryMetricRunner()
     bind_reg = InMemoryBindingRegistry()
-    # Simple event bus: subscribe to status/evaluation events for demo
     bus = InMemoryEventBus()
     bus.subscribe("run.status_changed", lambda ev: print("[EVENT] status:", ev.get("status"), ev.get("run_id")))
     bus.subscribe("run.evaluated", lambda ev: print("[EVENT] evaluated:", ev.get("run_id")))
-
-    zoo = ModelZoo(model_reg, metric_reg,
-                   binding_registry=bind_reg,
-                   model_runner=model_runner,
-                   metric_runner=LibraryMetricRunner(),
-                   validator=DefaultParamValidator(),
-                   audit=PrintAudit(),
-                   event_bus=bus)
-    
-
-    # Define two library models: OLS linear regression and Bayesian linear regression
-    lin_hp = HyperParamSpace(fields={
-        "fit_intercept": HyperParamField("fit_intercept", DType.BOOL, default=True, required=False,
-                                          description="Include intercept in linear model"),
-    })
-
-    bayes_hp = HyperParamSpace(fields={
-        "sigma": HyperParamField("sigma", DType.FLOAT, default=0.5, required=True,
-                                  description="Observation noise std"),
-        "prior_mu": HyperParamField("prior_mu", DType.FLOAT, default=0.0, required=False,
-                                     description="Prior mean for slope"),
-        "prior_tau": HyperParamField("prior_tau", DType.FLOAT, default=10.0, required=False,
-                                      description="Prior std for slope"),
-        "fit_intercept": HyperParamField("fit_intercept", DType.BOOL, default=True, required=False),
-        "draws": HyperParamField("draws", DType.INT, default=0, required=False,
-                                  description="Number of posterior samples to draw for diagnostics"),
-        "tune": HyperParamField("tune", DType.INT, default=0, required=False,
-                                 description="Tuning steps (ignored in conjugate demo)"),
-        "priors": HyperParamField(
-            "priors", DType.DICT, default=None, required=False,
-            description=(
-                "Structured priors override. Example: "
-                "{'beta': {'distribution': 'normal', 'mu': 0.0, 'tau': 5.0}, "
-                " 'sigma': {'distribution': 'gamma', 'shape': 2.0, 'rate': 1.0}}"
-            ),
-            example={
-                "beta": {"distribution": "normal", "mu": 0.0, "tau": 5.0},
-                "sigma": {"distribution": "gamma", "shape": 2.0, "rate": 1.0},
-            },
-        ),
-    })
-
-    lin_spec = ModelSpec(
-        model_id="linear_regression_v1",
-        name="LinearRegression_OLS",
-        version="1.0.0",
-        kind=ModelKind.LIBRARY,
-        hyperparams=lin_hp,
-        tags=["linear", "ols"],
-        metadata={"example": True}
+    zoo = ModelZoo(
+        model_registry=model_reg,
+        metric_registry=metric_reg,
+        model_runner=model_runner,
+        metric_runner=metric_runner,
+        validator=DefaultParamValidator(),
+        binding_registry=bind_reg,
+        audit=PrintAudit(),
+        event_bus=bus,
     )
+    return zoo, bind_reg
 
-    bayes_spec = ModelSpec(
-        model_id="bayes_linear_v1",
-        name="BayesianLinearRegression_Conjugate",
-        version="1.0.0",
-        kind=ModelKind.LIBRARY,
-        hyperparams=bayes_hp,
-        tags=["bayesian", "regression"],
-        metadata={"example": True}
-    )
 
-    zoo.register_model(lin_spec, actor="you")
-    zoo.register_model(bayes_spec, actor="you")
+def register_metrics(zoo: ModelZoo) -> None:
+    r2_spec = EvalMetricSpec("r2_v1", "R2_Score", "1.0.0", MetricDirection.HIGHER_IS_BETTER, MetricKind.LIBRARY)
+    mse_spec = EvalMetricSpec("mse_v1", "MeanSquaredError", "1.0.0", MetricDirection.LOWER_IS_BETTER, MetricKind.LIBRARY)
+    zoo.register_metric(r2_spec, actor="example")
+    zoo.register_metric(mse_spec, actor="example")
 
-    # Register evaluation metrics (separate from model outputs)
-    r2_spec = EvalMetricSpec(
-        metric_id="r2_v1",
-        name="R2_Score",
-        version="1.0.0",
-        direction=MetricDirection.HIGHER_IS_BETTER,
-        kind=MetricKind.LIBRARY,
-        tags=["regression", "goodness_of_fit"],
-    )
-    mse_spec = EvalMetricSpec(
-        metric_id="mse_v1",
-        name="MeanSquaredError",
-        version="1.0.0",
-        direction=MetricDirection.LOWER_IS_BETTER,
-        kind=MetricKind.LIBRARY,
-        tags=["regression", "error"],
-    )
-    zoo.register_metric(r2_spec, actor="you")
-    zoo.register_metric(mse_spec, actor="you")
 
-    # List models
-    print("Registered models:")
-    for m in zoo.list_models():
-        print(" -", m.model_id, m.name, m.version)
-    print("Registered metrics:")
-    for mt in zoo.list_metrics():
-        print(" -", mt.metric_id, mt.name, mt.version)
-
-    # Prepare synthetic dataset (INLINE DataRefs)
-    X, y = make_synthetic_linear(n=100, slope=2.0, intercept=1.0, noise_sigma=0.5)
-    X_ref = DataRef(ref_type=DataRefType.INLINE, inline=X)
-    y_ref = DataRef(ref_type=DataRefType.INLINE, inline=y)
-    # Train/test split indices (80/20)
-    n = len(X)
-    split = int(0.8 * n)
-    train_idx = list(range(0, split))
-    test_idx = list(range(split, n))
-
-    # Bindings to example in-process callables
-    lin_binding = ExecutionBinding(
-        bound_id="linear_regression_v1", kind=BindingKind.LIBRARY,
-        module="model_zoo.examples.models", callable="linreg_train_and_infer",
-    )
-    bayes_binding = ExecutionBinding(
-        bound_id="bayes_linear_v1", kind=BindingKind.LIBRARY,
-        module="model_zoo.examples.models", callable="bayes_linreg_train_and_infer",
-    )
-
-    # Metric bindings
-    r2_binding = ExecutionBinding(
-        bound_id="r2_v1", kind=BindingKind.LIBRARY,
-        module="model_zoo.examples.metrics", callable="r2_score",
-    )
-    mse_binding = ExecutionBinding(
-        bound_id="mse_v1", kind=BindingKind.LIBRARY,
-        module="model_zoo.examples.metrics", callable="mse",
-    )
-
-    # Register model and metric bindings in registry (so requests needn't carry them)
-    bind_reg.register_model_binding("linear_regression_v1", lin_binding)
-    bind_reg.register_model_binding("bayes_linear_v1", bayes_binding)
+def register_metric_bindings(bind_reg: InMemoryBindingRegistry) -> None:
+    r2_binding = ExecutionBinding("r2_v1", BindingKind.LIBRARY, module="model_zoo.examples.metrics", callable="r2_score")
+    mse_binding = ExecutionBinding("mse_v1", BindingKind.LIBRARY, module="model_zoo.examples.metrics", callable="mse")
     bind_reg.register_metric_binding("r2_v1", r2_binding)
     bind_reg.register_metric_binding("mse_v1", mse_binding)
 
-    # Run linear regression with training on train_idx and evaluate on test_idx
-    lin_req = ModelRunRequest(
-        model_id="linear_regression_v1",
-        inputs={"X": X_ref, "y": y_ref},
-        params={"fit_intercept": True, "train_indices": train_idx, "feature_name": "X"},
-        context=ExecutionContext(random_seed=2025, timeout_s=60),
-        dataset_version="synthetic:v1",
-        evaluation=EvaluationSpec(
-            metric_ids=["r2_v1", "mse_v1"],
-            y_true_key="y",
-            compute_train=True,
-            compute_valid=True,
-            train_indices=train_idx,
-            test_indices=test_idx,
-            bindings={
-                "r2_v1": r2_binding,
-                "mse_v1": mse_binding,
-            }
-        ),
+
+def register_model_from_config(zoo: ModelZoo, bind_reg: InMemoryBindingRegistry, cfg: ModelConfiguration) -> None:
+    model_info = cfg.model
+    model_spec = ModelSpec(
+        model_id=model_info["id"],
+        name=model_info.get("name", model_info["id"]),
+        version=model_info.get("version", "0.0.1"),
+        kind=ModelKind[model_info.get("kind", "library").upper()],
+        hyperparams=cfg.hyperparam_space,
+        tags=model_info.get("tags", []),
     )
-    def wait_for_result(zoo_obj, run_id: str, actor: str = "you", timeout_s: float = 300.0):
-        import time
-        start = time.monotonic()
-        sleep = 0.05
-        last = None
-        while True:
-            res = zoo_obj.get_run_result(run_id, actor=actor)
-            last = res
-            # Break when terminal status or in_progress flag cleared
-            if res.status.name in ("SUCCEEDED", "FAILED", "CANCELLED"):
-                return res
-            if not res.metadata.get("in_progress"):
-                return res
-            if time.monotonic() - start > timeout_s:
-                return res
-            time.sleep(sleep)
-            sleep = min(sleep * 1.5, 1.0)
-        return last
+    zoo.register_model(model_spec, actor="example")
 
-    try:
-        lin_handle = zoo.submit_run(lin_req, actor="you")
-        lin_res = wait_for_result(zoo, lin_handle.run_id, actor="you")
-    except Exception:
-        log.exception("Linear run failed")
-        raise
-    print("LinearRegression: status=", lin_res.status.value)
-    print(r_style_summary_string(lin_res.summary))
-
-    # Switch to Bayesian linear regression (swap model_id + binding + params) with same split
-    bayes_req = ModelRunRequest(
-        model_id="bayes_linear_v1",
-        inputs={"X": X_ref, "y": y_ref},
-        params={
-            "sigma": 0.5,
-            "prior_mu": 0.0,
-            "prior_tau": 5.0,
-            "fit_intercept": True,
-            "train_indices": train_idx,
-            "draws": 200,
-            "tune": 100,
-            "priors": {"beta": {"mu": 0.0, "tau": 5.0}},
-            "feature_name": "X",
-        },
-        context=ExecutionContext(random_seed=2025, timeout_s=90),
-        dataset_version="synthetic:v1",
-        evaluation=EvaluationSpec(
-            metric_ids=["r2_v1", "mse_v1"],
-            y_true_key="y",
-            compute_train=True,
-            compute_valid=True,
-            train_indices=train_idx,
-            test_indices=test_idx,
-            bindings={
-                "r2_v1": r2_binding,
-                "mse_v1": mse_binding,
-            }
-        ),
+    binding_info = model_info.get("binding") or {}
+    binding = ExecutionBinding(
+        bound_id=model_info["id"],
+        kind=BindingKind.LIBRARY,
+        module=binding_info["module"],
+        callable=binding_info["callable"],
     )
-    try:
-        bayes_handle = zoo.submit_run(bayes_req, actor="you")
-        bayes_res = wait_for_result(zoo, bayes_handle.run_id, actor="you")
-    except Exception:
-        log.exception("Bayesian run failed")
-        raise
-    print("BayesLinear: status=", bayes_res.status.value)
-    print(r_style_summary_string(bayes_res.summary))
+    bind_reg.register_model_binding(model_info["id"], binding)
 
-    # Run Bayesian model again showing explicit priors configuration in hyperparameters
-    # This time include a Gamma prior on sigma (precision conjugacy via Normal-Gamma)
-    custom_priors = {
-        "beta": {"distribution": "normal", "mu": 0.5, "tau": 2.0},
-        "sigma": {"distribution": "gamma", "shape": 3.0, "rate": 2.0},
+
+def build_data_sources(x_vals: List[float], y_vals: List[float]) -> Dict[str, List[float]]:
+    return {
+        "x_values": x_vals,
+        "y_values": y_vals,
     }
-    bayes_req_custom = ModelRunRequest(
-        model_id="bayes_linear_v1",
-        inputs={"X": X_ref, "y": y_ref},
-        params={
-            "sigma": 0.5,
-            "prior_mu": 0.0,      # can be omitted when using 'priors'
-            "prior_tau": 10.0,    # can be omitted when using 'priors'
-            "fit_intercept": True,
-            "train_indices": train_idx,
-            "draws": 100,
-            "priors": custom_priors,
-            "feature_name": "X",
-        },
-        context=ExecutionContext(random_seed=2025, timeout_s=90),
-        dataset_version="synthetic:v1",
-        evaluation=EvaluationSpec(
-            metric_ids=["r2_v1", "mse_v1"],
-            y_true_key="y",
-            compute_train=True,
-            compute_valid=True,
-            train_indices=train_idx,
-            test_indices=test_idx,
-            bindings={
-                "r2_v1": r2_binding,
-                "mse_v1": mse_binding,
-            }
-        ),
-    )
-    try:
-        bayes_handle2 = zoo.submit_run(bayes_req_custom, actor="you")
-        bayes_res2 = wait_for_result(zoo, bayes_handle2.run_id, actor="you")
-    except Exception:
-        log.exception("Bayesian run (custom priors) failed")
-        raise
-    print("BayesLinear (custom priors): status=", bayes_res2.status.value)
-    print(r_style_summary_string(bayes_res2.summary))
-    
-    
-    # ------------------------------------------------------------------
-    # Bayesian model with synthetic mtcars-like data (mpg ~ wt) and custom priors
-    wt, mpg = make_synthetic_mtcars_wt_mpg(n=32, alpha=36.0, beta=-4.5, noise_sigma=2.0)
-    wt_ref = DataRef(ref_type=DataRefType.INLINE, inline=wt)
-    mpg_ref = DataRef(ref_type=DataRefType.INLINE, inline=mpg)
-    n_m = len(wt)
-    split_m = int(0.75 * n_m)
-    tr_idx_m = list(range(split_m))
-    te_idx_m = list(range(split_m, n_m))
 
-    mtcars_spec = ModelSpec(
-        model_id="bayes_mtcars_wt_v1",
-        name="BayesianLinearRegression_mtcars_wt",
-        version="1.0.0",
-        kind=ModelKind.LIBRARY,
-        hyperparams=bayes_hp,
-        tags=["bayesian", "mtcars", "regression"],
-        metadata={"example": True},
-    )
-    zoo.register_model(mtcars_spec, actor="you")
 
-    mtcars_binding = ExecutionBinding(
-        bound_id="bayes_mtcars_wt_v1", kind=BindingKind.LIBRARY,
-        module="model_zoo.examples.models", callable="bayes_linreg_train_and_infer",
-    )
-    bind_reg.register_model_binding("bayes_mtcars_wt_v1", mtcars_binding)
-    mtcars_req = ModelRunRequest(
-        model_id="bayes_mtcars_wt_v1",
-        inputs={"X": wt_ref, "y": mpg_ref},
-        params={
-            "sigma": 2.0,
-            "fit_intercept": True,
-            "train_indices": tr_idx_m,
-            "draws": 200,
-            "priors": {
-                "beta": {"distribution": "normal", "mu": -4.0, "tau": 3.0},
-                "sigma": {"distribution": "gamma", "shape": 3.0, "rate": 2.0},
-            },
-            "feature_name": "wt",
-        },
-        context=ExecutionContext(random_seed=2025),
-        dataset_version="synthetic_mtcars:v1",
-        evaluation=EvaluationSpec(
-            metric_ids=["r2_v1", "mse_v1"],
-            y_true_key="y",
-            compute_train=True,
-            compute_valid=True,
-            train_indices=tr_idx_m,
-            test_indices=te_idx_m,
-            bindings={"r2_v1": r2_binding, "mse_v1": mse_binding},
-        ),
-    )
-    try:
-        mt_handle = zoo.submit_run(mtcars_req, actor="you")
-        mt_res = wait_for_result(zoo, mt_handle.run_id, actor="you")
-        print("Bayes (mtcars mpg~wt): status=", mt_res.status.value)
-        print(r_style_summary_string(mt_res.summary))
-    except Exception as e:
-        log.exception("Bayesian mtcars example failed: %s", e)
+def build_inputs(cfg: ModelConfiguration, data_sources: Dict[str, List[float]]) -> Tuple[Dict[str, DataRef], Dict[str, Any]]:
+    variables, groups = build_variables(cfg.variables, data_sources)
+    input_keys = cfg.model.get("inputs", ["X", "y"])
+    inputs: Dict[str, DataRef] = {}
+    for key in input_keys:
+        value = variables.get(key)
+        if value is None:
+            raise KeyError(f"Configuration inputs missing key '{key}'")
+        inputs[key] = DataRef(ref_type=DataRefType.INLINE, inline=value)
+    return inputs, groups
 
-    # ------------------------------------------------------------------
-    # Multivariate mtcars-like: mpg ~ wt + hp + disp
-    X_rows, y_m, feat_names = make_synthetic_mtcars_multi()
-    X_rows_ref = DataRef(ref_type=DataRefType.INLINE, inline=X_rows)
-    y_m_ref = DataRef(ref_type=DataRefType.INLINE, inline=y_m)
-    n_mv = len(X_rows)
-    split_mv = int(0.75 * n_mv)
-    tr_idx_mv = list(range(split_mv))
-    te_idx_mv = list(range(split_mv, n_mv))
 
-    # Sklearn multivariate
-    sk_multi_spec = ModelSpec(
-        model_id="sklearn_linear_mtcars_v1",
-        name="SklearnLinearRegression_MTCarsMulti",
-        version="1.0.0",
-        kind=ModelKind.LIBRARY,
-        hyperparams=HyperParamSpace(fields={
-            "fit_intercept": HyperParamField("fit_intercept", DType.BOOL, default=True),
-            "feature_names": HyperParamField("feature_names", DType.LIST, default=None),
-        }),
-        tags=["sklearn", "linear", "mtcars"],
-        metadata={"example": True}
+def build_evaluation(cfg: ModelConfiguration, train_idx: List[int], test_idx: List[int]) -> EvaluationSpec:
+    if cfg.evaluation is None:
+        return EvaluationSpec(metric_ids=["r2_v1", "mse_v1"], y_true_key="y", train_indices=train_idx, test_indices=test_idx)
+    spec = cfg.evaluation
+    return EvaluationSpec(
+        metric_ids=spec.metric_ids,
+        y_true_key=spec.y_true_key,
+        compute_train=spec.compute_train,
+        compute_valid=spec.compute_valid,
+        train_indices=spec.train_indices if spec.train_indices is not None else train_idx,
+        test_indices=spec.test_indices if spec.test_indices is not None else test_idx,
     )
-    zoo.register_model(sk_multi_spec, actor="you")
-    sk_multi_binding = ExecutionBinding(
-        bound_id="sklearn_linear_mtcars_v1", kind=BindingKind.LIBRARY,
-        module="model_zoo.examples.sklearn_models", callable="sk_lr_train_and_infer",
-    )
-    sk_multi_req = ModelRunRequest(
-        model_id="sklearn_linear_mtcars_v1",
-        inputs={"X": X_rows_ref, "y": y_m_ref},
-        params={"fit_intercept": True, "train_indices": tr_idx_mv, "feature_names": feat_names},
-        binding=sk_multi_binding,
-        context=ExecutionContext(random_seed=2025),
-        evaluation=EvaluationSpec(
-            metric_ids=["r2_v1", "mse_v1"],
-            y_true_key="y",
-            compute_train=True,
-            compute_valid=True,
-            train_indices=tr_idx_mv,
-            test_indices=te_idx_mv,
-            bindings={"r2_v1": r2_binding, "mse_v1": mse_binding},
-        ),
-    )
-    try:
-        skm_handle = zoo.submit_run(sk_multi_req, actor="you")
-        skm_res = wait_for_result(zoo, skm_handle.run_id, actor="you")
-        print("SklearnLinear (mtcars multi): status=", skm_res.status.value)
-        print(r_style_summary_string(skm_res.summary))
-    except Exception as e:
-        log.warning("Sklearn multivariate example skipped: %s", e)
 
-    # PyMC multivariate NUTS
-    pymc_multi_spec = ModelSpec(
-        model_id="pymc_linear_nuts_mtcars_v1",
-        name="PyMCLinearNUTS_MTCarsMulti",
-        version="1.0.0",
-        kind=ModelKind.LIBRARY,
-        hyperparams=HyperParamSpace(fields={
-            "draws": HyperParamField("draws", DType.INT, default=500),
-            "tune": HyperParamField("tune", DType.INT, default=500),
-            "target_accept": HyperParamField("target_accept", DType.FLOAT, default=0.9),
-            "priors": HyperParamField("priors", DType.DICT, default=None),
-            "feature_names": HyperParamField("feature_names", DType.LIST, default=None),
-        }),
-        tags=["pymc", "nuts", "bayesian", "mtcars"],
-        metadata={"example": True}
-    )
-    zoo.register_model(pymc_multi_spec, actor="you")
-    pymc_multi_binding = ExecutionBinding(
-        bound_id="pymc_linear_nuts_mtcars_v1", kind=BindingKind.LIBRARY,
-        module="model_zoo.examples.pymc_models", callable="pymc_linear_nuts",
-    )
-    bind_reg.register_model_binding("pymc_linear_nuts_mtcars_v1", pymc_multi_binding)
-    # Custom per-feature priors for PyMC multivariate (match feature_names order)
-    beta_mu_map = {"wt": -4.0, "hp": -0.01, "disp": -0.005}
-    beta_tau_map = {"wt": 3.0, "hp": 0.05, "disp": 0.02}
-    beta_mu_list = [beta_mu_map.get(n, 0.0) for n in feat_names]
-    beta_tau_list = [beta_tau_map.get(n, 10.0) for n in feat_names]
 
-    pymc_multi_req = ModelRunRequest(
-        model_id="pymc_linear_nuts_mtcars_v1",
-        inputs={"X": X_rows_ref, "y": y_m_ref},
-        params={
-            "draws": 300,
-            "tune": 300,
-            "target_accept": 0.9,
-            "chains": 2,
-            "cores": 1,
-            "compute_convergence_checks": True,
-            "train_indices": tr_idx_mv,
-            "feature_names": feat_names,
-            # Custom per-feature priors for beta (Normal) and sigma (Gamma/Erlang)
-            "priors": {
-                "beta": {"distribution": "normal", "mu": beta_mu_list, "tau": beta_tau_list},
-                "sigma": {"distribution": "erlang", "shape": 3.0, "rate": 2.0},
-            },
-        },
-        context=ExecutionContext(random_seed=2025),
-        evaluation=EvaluationSpec(
-            metric_ids=["r2_v1", "mse_v1"],
-            y_true_key="y",
-            compute_train=True,
-            compute_valid=True,
-            train_indices=tr_idx_mv,
-            test_indices=te_idx_mv,
-            bindings={"r2_v1": r2_binding, "mse_v1": mse_binding},
-        ),
+def submit_run(zoo: ModelZoo, cfg: ModelConfiguration, inputs: Dict[str, DataRef], train_idx: List[int], test_idx: List[int]) -> str:
+    params = dict(cfg.params)
+    params.setdefault("train_indices", train_idx)
+    context = ExecutionContext(**cfg.context)
+    evaluation = build_evaluation(cfg, train_idx, test_idx)
+    req = ModelRunRequest(
+        model_id=cfg.model["id"],
+        inputs=inputs,
+        params=params,
+        context=context,
+        evaluation=evaluation,
     )
-    try:
-        pmm_handle = zoo.submit_run(pymc_multi_req, actor="you")
-        pmm_res = wait_for_result(zoo, pmm_handle.run_id, actor="you")
-        print("PyMC NUTS (mtcars multi): status=", pmm_res.status.value)
-        print(r_style_summary_string(pmm_res.summary))
-    except Exception as e:
-        log.warning("PyMC multivariate example skipped: %s", e)
+    handle = zoo.submit_run(req)
+    return handle.run_id
 
-    # scikit-learn LinearRegression example (if sklearn installed)
-    sk_spec = ModelSpec(
-        model_id="sklearn_linear_v1",
-        name="SklearnLinearRegression",
-        version="1.0.0",
-        kind=ModelKind.LIBRARY,
-        hyperparams=HyperParamSpace(fields={
-            "fit_intercept": HyperParamField("fit_intercept", DType.BOOL, default=True),
-        }),
-        tags=["sklearn", "linear"],
-        metadata={"example": True}
-    )
-    zoo.register_model(sk_spec, actor="you")
-    sk_binding = ExecutionBinding(
-        bound_id="sklearn_linear_v1", kind=BindingKind.LIBRARY,
-        module="model_zoo.examples.sklearn_models", callable="sk_lr_train_and_infer",
-    )
-    bind_reg.register_model_binding("sklearn_linear_v1", sk_binding)
-    sk_req = ModelRunRequest(
-        model_id="sklearn_linear_v1",
-        inputs={"X": X_ref, "y": y_ref},
-        params={"fit_intercept": True, "train_indices": train_idx, "feature_names": ["X"]},
-        context=ExecutionContext(random_seed=2025),
-        evaluation=EvaluationSpec(
-            metric_ids=["r2_v1", "mse_v1"],
-            y_true_key="y",
-            compute_train=True,
-            compute_valid=True,
-            train_indices=train_idx,
-            test_indices=test_idx,
-            bindings={"r2_v1": r2_binding, "mse_v1": mse_binding},
-        ),
-    )
-    try:
-        sk_handle = zoo.submit_run(sk_req, actor="you")
-        sk_res = wait_for_result(zoo, sk_handle.run_id, actor="you")
-        print("SklearnLinear: status=", sk_res.status.value)
-        print(r_style_summary_string(sk_res.summary))
-    except Exception as e:
-        log.warning("Sklearn example skipped: %s", e)
 
-   
+def wait_for_result(zoo: ModelZoo, run_id: str, actor: str = "example", timeout_s: float = 600.0):
+    import time
+    start, delay = time.monotonic(), 0.05
+    while True:
+        res = zoo.get_run_result(run_id, actor=actor)
+        if res.status.name in ("SUCCEEDED", "FAILED", "CANCELLED"):
+            return res
+        if not res.metadata.get("in_progress"):
+            return res
+        if time.monotonic() - start > timeout_s:
+            return res
+        time.sleep(delay)
+        delay = min(delay * 1.5, 1.0)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Config-driven register and run example")
+    parser.add_argument("--env", default="dev", help="Environment key for configuration entries")
+    parser.add_argument("--env-file", default=".env", help="Path to env file with PostgreSQL credentials")
+    parser.add_argument("--linear-config", default="configs/linear_regression.json", help="Path to linear model config")
+    parser.add_argument("--bayes-config", default="configs/bayes_linear.json", help="Path to bayesian model config")
+    parser.add_argument("--points", type=int, default=100, help="Number of synthetic datapoints")
+    parser.add_argument("--slope", type=float, default=2.0, help="Slope for synthetic data generation")
+    parser.add_argument("--intercept", type=float, default=1.0, help="Intercept for synthetic data")
+    parser.add_argument("--noise", type=float, default=0.5, help="Noise sigma for synthetic data")
+    parser.add_argument("--train-fraction", type=float, default=0.8, help="Fraction of samples used for training split")
+    args = parser.parse_args()
+
+    configure_logging("INFO")
+    quiet_third_party_loggers()
+    log = get_logger(__name__)
+    log.info("Starting config-driven register and run example")
+
+    env_settings = read_env_file(args.env_file)
+    dsn, table_name = build_postgres_dsn(env_settings)
+    zoo, bind_reg = configure_zoo(dsn, table_name)
+    register_metrics(zoo)
+    register_metric_bindings(bind_reg)
+
+    linear_cfg = load_model_configuration(args.linear_config, env=args.env)
+    bayes_cfg = load_model_configuration(args.bayes_config, env=args.env)
+    register_model_from_config(zoo, bind_reg, linear_cfg)
+    register_model_from_config(zoo, bind_reg, bayes_cfg)
+
+    X, y = make_synthetic_linear(n=args.points, slope=args.slope, intercept=args.intercept, noise_sigma=args.noise)
+    train_split = max(1, min(len(X), int(len(X) * args.train_fraction)))
+    train_idx = list(range(train_split))
+    test_idx = list(range(train_split, len(X)))
+
+    data_sources = build_data_sources(X, y)
+    linear_inputs, linear_groups = build_inputs(linear_cfg, data_sources)
+    bayes_inputs, bayes_groups = build_inputs(bayes_cfg, data_sources)
+
+    linear_run_id = submit_run(zoo, linear_cfg, linear_inputs, train_idx, test_idx)
+    bayes_run_id = submit_run(zoo, bayes_cfg, bayes_inputs, train_idx, test_idx)
+
+    linear_res = wait_for_result(zoo, linear_run_id, actor="linear")
+    bayes_res = wait_for_result(zoo, bayes_run_id, actor="bayes")
+
+    print("Linear status:", linear_res.status.value)
+    print(r_style_summary_string(linear_res.summary))
+    print("Linear groups:", list(linear_groups.keys()))
+    print("Bayesian status:", bayes_res.status.value)
+    print(r_style_summary_string(bayes_res.summary))
+    print("Bayesian groups:", list(bayes_groups.keys()))
+
 
 if __name__ == "__main__":
     main()

@@ -32,9 +32,12 @@ def build_variables(
     resolved: Dict[str, Any] = {}
     for var in config.active_variables():
         source_name = var.source
-        if source_name not in data_sources:
+        if source_name in data_sources:
+            raw_value = data_sources[source_name]
+        elif source_name in resolved:
+            raw_value = resolved[source_name]
+        else:
             raise KeyError(f"Missing data source for variable '{source_name}'")
-        raw_value = data_sources[source_name]
         transformed = apply_transforms(raw_value, _specs_to_payload(var.transforms), registry)
         resolved[var.name] = transformed
 
@@ -55,4 +58,3 @@ def build_variables(
     merged = dict(resolved)
     merged.update(grouped)
     return merged, grouped
-

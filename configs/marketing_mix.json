@@ -1,0 +1,80 @@
+{
+  "model": {
+    "id": "pymc_marketing_mix_v1",
+    "name": "Bayesian Marketing Mix (PyMC)",
+    "version": "1.0.0",
+    "kind": "library",
+    "binding": {
+      "module": "model_zoo.examples.pymc_models",
+      "callable": "pymc_linear_nuts"
+    },
+    "inputs": ["X", "y"]
+  },
+  "hyperparameters": {
+    "schema": [
+      {"name": "draws", "dtype": "int", "default": 400},
+      {"name": "tune", "dtype": "int", "default": 400},
+      {"name": "target_accept", "dtype": "float", "default": 0.9},
+      {"name": "chains", "dtype": "int", "default": 4},
+      {"name": "cores", "dtype": "int", "default": 1},
+      {"name": "compute_convergence_checks", "dtype": "bool", "default": true},
+      {"name": "feature_names", "dtype": "list", "default": ["tv", "radio", "social"]},
+      {"name": "priors", "dtype": "dict", "default": null}
+    ],
+    "values": [
+      {"model_id": "pymc_marketing_mix_v1", "param": "draws", "value": 400, "env": "dev"},
+      {"model_id": "pymc_marketing_mix_v1", "param": "tune", "value": 400, "env": "dev"},
+      {"model_id": "pymc_marketing_mix_v1", "param": "target_accept", "value": 0.9, "env": "dev"},
+      {"model_id": "pymc_marketing_mix_v1", "param": "chains", "value": 4, "env": "dev"},
+      {"model_id": "pymc_marketing_mix_v1", "param": "cores", "value": 1, "env": "dev"},
+      {"model_id": "pymc_marketing_mix_v1", "param": "compute_convergence_checks", "value": "true", "env": "dev"},
+      {
+        "model_id": "pymc_marketing_mix_v1",
+        "param": "priors",
+        "value": {
+          "beta": {
+            "distribution": ["normal", "half_normal", "gamma"],
+            "mu": [2.0, null, null],
+            "tau": [1.0, null, null],
+            "scale": [null, 1.0, null],
+            "shape": [null, null, 2.0],
+            "rate": [null, null, 1.0]
+          },
+          "sigma": {"distribution": "half_normal", "scale": 5.0}
+        },
+        "env": "dev"
+      }
+    ]
+  },
+  "variables": {
+    "definitions": [
+      {"name": "tv", "source": "tv_spend"},
+      {"name": "radio", "source": "radio_spend"},
+      {"name": "social", "source": "social_spend"},
+      {"name": "X", "source": "marketing_rows"},
+      {"name": "y", "source": "sales"}
+    ],
+    "groups": [
+      {
+        "id": "spend_channels",
+        "variables": ["tv", "radio", "social"],
+        "transforms": [
+          {
+            "id": "stack",
+            "params": {"keys": ["tv", "radio", "social"]}
+          }
+        ],
+        "output_name": "channel_spend_views"
+      }
+    ]
+  },
+  "evaluation": {
+    "metric_ids": ["r2_v1", "mse_v1"],
+    "y_true_key": "y",
+    "compute_train": true,
+    "compute_valid": true
+  },
+  "context": {
+    "timeout_s": 180
+  }
+}
