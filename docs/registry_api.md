@@ -7,7 +7,7 @@ This document explains how to use the FastAPI-based registry service that ships 
 The API exposes endpoints for:
 
 - Registering a model configuration (hyperparameters, variable transforms, evaluation spec) with environment scoping.
-- Persisting model specifications (id, version, hyperparameter schema) independently of configurations.
+- Persisting model specificatidocker compose ons (id, version, hyperparameter schema) independently of configurations.
 - Retrieving model specs and configuration history from PostgreSQL.
 
 Under the hood:
