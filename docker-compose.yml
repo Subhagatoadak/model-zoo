@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: model-zoo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: model_zoo
+      POSTGRES_USER: model_zoo_user
+      POSTGRES_PASSWORD: change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d model_zoo -U model_zoo_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: model-zoo-api
+    restart: unless-stopped
+    environment:
+      POSTGRES_DSN: postgresql://model_zoo_user:change_me@postgres:5432/model_zoo
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./configs:/app/configs:ro
+
+volumes:
+  postgres_data:

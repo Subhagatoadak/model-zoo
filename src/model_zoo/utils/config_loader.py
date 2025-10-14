@@ -222,20 +222,7 @@ def _extract_evaluation(payload: Dict[str, Any], env: Optional[str]) -> Optional
     return None
 
 
-def load_model_configuration(path: str | Path, env: Optional[str] = None, model_id: Optional[str] = None) -> ModelConfiguration:
-    """Load a configuration document and produce a `ModelConfiguration`.
-
-    Args:
-        path: filesystem path to the JSON configuration file.
-        env: optional environment name used to filter entries that declare an 'env'.
-        model_id: optional explicit model identifier. Defaults to the id from config.
-    """
-
-    resolved_path = Path(path)
-    if not resolved_path.exists():
-        raise FileNotFoundError(f"Configuration file not found: {resolved_path}")
-    payload = _load_json(resolved_path)
-
+def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optional[str], model_id: Optional[str]) -> ModelConfiguration:
     model_section = payload.get("model") or {}
     config_model_id = model_section.get("id") or model_section.get("model_id")
     if model_id is None and config_model_id is None:
@@ -269,3 +256,26 @@ def load_model_configuration(path: str | Path, env: Optional[str] = None, model_
         context=context,
     )
 
+
+def load_model_configuration(path: str | Path, env: Optional[str] = None, model_id: Optional[str] = None) -> ModelConfiguration:
+    """Load a configuration document and produce a `ModelConfiguration`.
+
+    Args:
+        path: filesystem path to the JSON configuration file.
+        env: optional environment name used to filter entries that declare an 'env'.
+        model_id: optional explicit model identifier. Defaults to the id from config.
+    """
+
+    resolved_path = Path(path)
+    if not resolved_path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {resolved_path}")
+    payload = _load_json(resolved_path)
+    return _load_model_configuration_from_payload(payload, env=env, model_id=model_id)
+
+
+def load_model_configuration_from_dict(payload: Dict[str, Any], env: Optional[str] = None, model_id: Optional[str] = None) -> ModelConfiguration:
+    """Load a configuration from an in-memory dictionary."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("Configuration payload must be a mapping")
+    return _load_model_configuration_from_payload(dict(payload), env=env, model_id=model_id)
