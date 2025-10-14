@@ -11,13 +11,26 @@ from pydantic import BaseModel, Field
 import psycopg
 from psycopg.types.json import Json
 
+from ..facade.model_zoo import ModelZoo
 from ..registry.models import ModelRegistry, ModelSpec, ModelKind
+from ..registry.metrics import MetricRegistry, EvalMetricSpec, MetricKind, MetricDirection
+from ..contracts.validation import ParamValidationService
+from ..contracts.validators import DefaultParamValidator
+from ..contracts.run_requests import EvaluationSpec, ModelRunRequest, RunStatus
+from ..contracts.io import DataRef, DataRefType, ExecutionContext
+from ..stores.run_store import InMemoryRunStore
+from ..runners.library import LibraryModelRunner, LibraryMetricRunner
 from ..utils.config_loader import (
     load_model_configuration_from_dict,
     ModelConfiguration,
 )
+from ..utils.variable_processing import build_variables
 from ..utils.env import read_env_file, build_postgres_dsn
 from ..bindings.registry import InMemoryBindingRegistry
+from ..bindings.base import ExecutionBinding, BindingKind
+from ..utils.summary import r_style_summary_string
+
+import time
 
 
 class RegistryDatabase:
@@ -166,6 +179,33 @@ class RegistryDatabase:
             for row in rows
         ]
 
+    def get_config(self, model_id: str, environment: Optional[str]) -> Optional[Dict[str, Any]]:
+        query = "SELECT config FROM model_configs WHERE model_id = %s"
+        params: List[Any] = [model_id]
+        if environment is not None:
+            query += " AND environment = %s"
+            params.append(environment)
+        else:
+            query += " AND environment IS NULL"
+        with psycopg.connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if row:
+                    return row[0]
+        if environment is not None:
+            # fallback to environment-agnostic config
+            with psycopg.connect(self._dsn) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT config FROM model_configs WHERE model_id = %s AND environment IS NULL",
+                        (model_id,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return row[0]
+        return None
+
 
 def _resolve_postgres_dsn() -> str:
     env_file = os.environ.get("MODEL_ZOO_ENV_FILE", ".env")
@@ -195,7 +235,9 @@ def _resolve_postgres_dsn() -> str:
 postgres_dsn = _resolve_postgres_dsn()
 database = RegistryDatabase(postgres_dsn)
 model_registry = ModelRegistry()
+metric_registry = MetricRegistry()
 binding_registry = InMemoryBindingRegistry()
+validator: ParamValidationService = DefaultParamValidator()
 
 app = FastAPI(title="Model Zoo Registry API", version="0.1.0")
 
@@ -233,6 +275,37 @@ class ModelSpecResponse(BaseModel):
     metadata: Dict[str, Any]
 
 
+class RunEvaluationRequest(BaseModel):
+    metric_ids: List[str]
+    y_true_key: str = "y"
+    compute_train: bool = True
+    compute_valid: bool = True
+    train_indices: Optional[List[int]] = None
+    test_indices: Optional[List[int]] = None
+
+
+class RunRequest(BaseModel):
+    model_id: str
+    env: Optional[str] = Field(default=None, description="Environment label for selecting configuration")
+    data_sources: Dict[str, Any]
+    params: Dict[str, Any] = Field(default_factory=dict)
+    context: Dict[str, Any] = Field(default_factory=dict)
+    evaluation: Optional[RunEvaluationRequest] = None
+    inputs: Optional[List[str]] = Field(default=None, description="Optional explicit list of input keys")
+
+
+class RunResponse(BaseModel):
+    run_id: str
+    status: str
+    predictions: Any = None
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
+    artifacts: Dict[str, Any] = Field(default_factory=dict)
+    eval_train: Dict[str, float] = Field(default_factory=dict)
+    eval_valid: Dict[str, float] = Field(default_factory=dict)
+    summary: Dict[str, Any] = Field(default_factory=dict)
+    summary_text: Optional[str] = None
+
+
 def _register_model_spec_from_configuration(cfg: ModelConfiguration) -> ModelSpec:
     model_info = cfg.model
     spec = ModelSpec(
@@ -249,6 +322,49 @@ def _register_model_spec_from_configuration(cfg: ModelConfiguration) -> ModelSpe
     except KeyError:
         model_registry.replace(spec.model_id, spec)
     database.upsert_spec(spec)
+
+    binding_info = model_info.get("binding") or {}
+    if binding_info:
+        binding = ExecutionBinding(
+            bound_id=spec.model_id,
+            kind=BindingKind.LIBRARY if (binding_info.get("kind") or "library").lower() == "library" else BindingKind.API,
+            module=binding_info["module"],
+            callable=binding_info["callable"],
+        )
+        binding_registry.register_model_binding(spec.model_id, binding)
+
+    metrics_cfg = cfg.raw.get("metrics") or []
+    for metric in metrics_cfg:
+        try:
+            kind = MetricKind[metric.get("kind", "library").upper()]
+        except KeyError:
+            kind = MetricKind.LIBRARY
+        direction_value = metric.get("direction", "higher_is_better").upper()
+        try:
+            direction = MetricDirection[direction_value]
+        except KeyError:
+            direction = MetricDirection.HIGHER_IS_BETTER
+        metric_spec = EvalMetricSpec(
+            metric_id=metric["metric_id"],
+            name=metric.get("name", metric["metric_id"]),
+            version=metric.get("version", "0.0.1"),
+            direction=direction,
+            kind=kind,
+            tags=metric.get("tags", []),
+        )
+        try:
+            metric_registry.register(metric_spec)
+        except KeyError:
+            metric_registry.replace(metric_spec.metric_id, metric_spec)
+        binding = metric.get("binding") or {}
+        if binding:
+            metric_binding = ExecutionBinding(
+                bound_id=metric_spec.metric_id,
+                kind=BindingKind.LIBRARY if (binding.get("kind") or "library").lower() == "library" else BindingKind.API,
+                module=binding["module"],
+                callable=binding["callable"],
+            )
+            binding_registry.register_metric_binding(metric_spec.metric_id, metric_binding)
     return spec
 
 
@@ -283,6 +399,65 @@ def _register_simple_model_spec(payload: ModelSpecRequest) -> ModelSpec:
 
 def get_database() -> RegistryDatabase:
     return database
+
+
+def _dataref_payload(ref: Optional[DataRef]) -> Any:
+    if ref is None:
+        return None
+    if ref.ref_type == DataRefType.INLINE:
+        return ref.inline
+    return ref.to_dict()
+
+
+def _artifacts_payload(artifacts: Dict[str, DataRef]) -> Dict[str, Any]:
+    return {name: _dataref_payload(ref) for name, ref in artifacts.items()}
+
+
+def _prepare_evaluation(
+    cfg: ModelConfiguration,
+    request_eval: Optional[RunEvaluationRequest],
+    total_length: int,
+) -> Optional[EvaluationSpec]:
+    base = cfg.evaluation
+    if base is None and request_eval is None:
+        return None
+
+    if base is not None:
+        spec = EvaluationSpec(
+            metric_ids=list(base.metric_ids),
+            y_true_key=base.y_true_key,
+            compute_train=base.compute_train,
+            compute_valid=base.compute_valid,
+            train_indices=base.train_indices,
+            test_indices=base.test_indices,
+        )
+    else:
+        spec = EvaluationSpec(metric_ids=[], y_true_key="y")
+
+    if request_eval is not None:
+        spec.metric_ids = list(request_eval.metric_ids)
+        spec.y_true_key = request_eval.y_true_key
+        spec.compute_train = request_eval.compute_train
+        spec.compute_valid = request_eval.compute_valid
+        spec.train_indices = request_eval.train_indices
+        spec.test_indices = request_eval.test_indices
+
+    if not spec.metric_ids:
+        return None
+
+    if not spec.train_indices or not spec.test_indices:
+        split = max(1, min(total_length, int(total_length * 0.8)))
+        spec.train_indices = list(range(split))
+        spec.test_indices = list(range(split, total_length))
+
+    bindings: Dict[str, ExecutionBinding] = {}
+    for mid in spec.metric_ids:
+        try:
+            bindings[mid] = binding_registry.get_metric_binding(mid)
+        except Exception:
+            continue
+    spec.bindings = bindings
+    return spec
 
 
 @app.get("/health", tags=["system"])
@@ -347,3 +522,106 @@ def list_model_configs(model_id: str, env: Optional[str] = None, db: RegistryDat
     if not configs:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No configs found for model '{model_id}'")
     return configs
+
+
+@app.post("/runs", response_model=RunResponse, tags=["runs"], status_code=status.HTTP_201_CREATED)
+def submit_run(payload: RunRequest, db: RegistryDatabase = Depends(get_database)) -> RunResponse:
+    stored_config = db.get_config(payload.model_id, payload.env)
+    if stored_config is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Configuration not found for model '{payload.model_id}'")
+
+    try:
+        cfg = load_model_configuration_from_dict(stored_config, env=payload.env, model_id=payload.model_id)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid configuration payload: {exc}") from exc
+
+    model_spec = _register_model_spec_from_configuration(cfg)
+
+    try:
+        variables, grouped = build_variables(cfg.variables, payload.data_sources)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to build variables: {exc}") from exc
+
+    combined = dict(variables)
+    combined.update(grouped)
+    input_keys = payload.inputs or cfg.model.get("inputs") or list(variables.keys())
+    inputs: Dict[str, DataRef] = {}
+    for key in input_keys:
+        if key not in combined:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input key '{key}' not produced by configuration")
+        inputs[key] = DataRef(ref_type=DataRefType.INLINE, inline=combined[key])
+
+    params = dict(cfg.params)
+    params.update(payload.params or {})
+
+    context_dict = dict(cfg.context)
+    context_dict.update(payload.context or {})
+    context = ExecutionContext(**context_dict)
+
+    target_key = None
+    if payload.evaluation is not None:
+        target_key = payload.evaluation.y_true_key
+    elif cfg.evaluation is not None:
+        target_key = cfg.evaluation.y_true_key
+    total_length = 0
+    if target_key and isinstance(combined.get(target_key), list):
+        total_length = len(combined[target_key])
+    else:
+        for key in input_keys:
+            value = combined.get(key)
+            if isinstance(value, list):
+                total_length = len(value)
+                break
+
+    eval_spec = _prepare_evaluation(cfg, payload.evaluation, total_length)
+
+    runner = LibraryModelRunner(max_workers=1, max_active_runs=1)
+    runner.set_run_store(InMemoryRunStore())
+    metric_runner = LibraryMetricRunner()
+    zoo = ModelZoo(
+        model_registry=model_registry,
+        metric_registry=metric_registry,
+        model_runner=runner,
+        metric_runner=metric_runner,
+        validator=validator,
+        binding_registry=binding_registry,
+    )
+
+    req = ModelRunRequest(
+        model_id=model_spec.model_id,
+        inputs=inputs,
+        params=params,
+        context=context,
+        evaluation=eval_spec,
+    )
+
+    handle = zoo.submit_run(req)
+
+    timeout = context.timeout_s or 300
+    deadline = time.monotonic() + float(timeout)
+    while True:
+        res = zoo.get_run_result(handle.run_id)
+        if res.status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED):
+            break
+        if time.monotonic() > deadline:
+            break
+        time.sleep(0.05)
+
+    result = zoo.get_run_result(handle.run_id)
+    summary_text = None
+    try:
+        summary_text = r_style_summary_string(result.summary) if result.summary else None
+    except Exception:
+        summary_text = None
+
+    return RunResponse(
+        run_id=handle.run_id,
+        status=result.status.value,
+        predictions=_dataref_payload(result.predictions),
+        diagnostics=result.diagnostics or {},
+        artifacts=_artifacts_payload(result.artifacts or {}),
+        eval_train=result.eval_train or {},
+        eval_valid=result.eval_valid or {},
+        summary=result.summary or {},
+        summary_text=summary_text,
+    )

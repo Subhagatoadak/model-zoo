@@ -48,6 +48,30 @@
       }
     ]
   },
+  "metrics": [
+    {
+      "metric_id": "r2_v1",
+      "name": "R2_Score",
+      "version": "1.0.0",
+      "direction": "higher_is_better",
+      "kind": "library",
+      "binding": {
+        "module": "model_zoo.examples.metrics",
+        "callable": "r2_score"
+      }
+    },
+    {
+      "metric_id": "mse_v1",
+      "name": "MeanSquaredError",
+      "version": "1.0.0",
+      "direction": "lower_is_better",
+      "kind": "library",
+      "binding": {
+        "module": "model_zoo.examples.metrics",
+        "callable": "mse"
+      }
+    }
+  ],
   "variables": {
     "definitions": [
       {"name": "tv", "source": "tv_spend"},

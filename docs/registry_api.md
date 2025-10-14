@@ -64,6 +64,8 @@ Client → FastAPI (uvicorn) → RegistryDatabase (psycopg) → PostgreSQL
    python examples/register_model_via_api.py --config configs/linear_regression.json --env dev
    ```
 
+   For a fully commented walkthrough (marketing mix example), open `docs/notebooks/marketing_mix_registry_walkthrough.ipynb` in Jupyter.
+
 4. List registered models:
 
    ```bash
@@ -76,7 +78,33 @@ Client → FastAPI (uvicorn) → RegistryDatabase (psycopg) → PostgreSQL
    curl http://localhost:8000/registry/models/linear_regression_v1 | jq
    ```
 
-6. Tear down containers:
+6. Submit a run using the stored configuration (synthetic linear data):
+
+   ```bash
+   curl -X POST http://localhost:8000/runs \
+        -H "Content-Type: application/json" \
+        -d '{
+              "model_id": "linear_regression_v1",
+              "env": "dev",
+              "data_sources": {
+                "x_values": [0.1, 0.2, 0.3, 0.4, 0.5],
+                "y_values": [1.2, 1.4, 1.6, 1.8, 2.0]
+              },
+              "evaluation": {
+                "metric_ids": ["r2_v1", "mse_v1"],
+                "y_true_key": "y"
+              }
+            }'
+   ```
+
+   The response includes the run status, diagnostics, evaluation metrics, and a
+   rendered summary string. You can also use the helper script:
+
+   ```bash
+   python examples/register_model_via_api.py --config configs/linear_regression.json --env dev --run
+   ```
+
+7. Tear down containers:
 
    ```bash
    docker compose down -v

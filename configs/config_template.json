@@ -29,6 +29,19 @@
       }
     ]
   },
+  "metrics": [
+    {
+      "metric_id": "metric_identifier",
+      "name": "Readable Metric Name",
+      "version": "1.0.0",
+      "direction": "higher_is_better",
+      "kind": "library",
+      "binding": {
+        "module": "path.to.metric.module",
+        "callable": "metric_callable"
+      }
+    }
+  ],
   "variables": {
     "definitions": [
       {
