@@ -1,0 +1,118 @@
+{
+  "model": {
+    "id": "linreg_config_v1",
+    "name": "Linear Regression (Config Driven)",
+    "version": "1.0.0",
+    "tags": ["linear", "config-driven"],
+    "kind": "library",
+    "binding": {
+      "module": "model_zoo.examples.models",
+      "callable": "linreg_train_and_infer"
+    }
+  },
+  "hyperparameters": {
+    "schema": [
+      {
+        "name": "fit_intercept",
+        "dtype": "bool",
+        "default": true,
+        "description": "Include intercept when fitting"
+      },
+      {
+        "name": "feature_name",
+        "dtype": "string",
+        "default": "X",
+        "description": "Label for diagnostics output"
+      }
+    ],
+    "values": [
+      {
+        "model_id": "linreg_config_v1",
+        "param": "fit_intercept",
+        "value": "true",
+        "env": "dev"
+      },
+      {
+        "model_id": "linreg_config_v1",
+        "param": "feature_name",
+        "value": "scaled_X",
+        "env": "dev"
+      }
+    ]
+  },
+  "variables": {
+    "definitions": [
+      {
+        "name": "feature_raw",
+        "source": "x_values",
+        "transforms": [
+          {"id": "identity"}
+        ],
+        "metadata": {
+          "description": "Raw synthetic feature"
+        }
+      },
+      {
+        "name": "feature_scaled",
+        "source": "feature_raw",
+        "transforms": [
+          {"id": "standardize"}
+        ],
+        "metadata": {
+          "description": "Standardized feature"
+        }
+      },
+      {
+        "name": "feature_poly",
+        "source": "feature_raw",
+        "transforms": [
+          {
+            "id": "poly_features",
+            "params": {
+              "degree": 2,
+              "prefix": "x"
+            }
+          }
+        ],
+        "metadata": {
+          "description": "Polynomial expansions"
+        }
+      },
+      {
+        "name": "X",
+        "source": "feature_scaled",
+        "transforms": [
+          {"id": "identity"}
+        ]
+      },
+      {
+        "name": "y",
+        "source": "y_values"
+      }
+    ],
+    "groups": [
+      {
+        "id": "feature_bundle",
+        "variables": ["feature_raw", "feature_scaled"],
+        "transforms": [
+          {
+            "id": "stack",
+            "params": {
+              "keys": ["raw", "scaled"]
+            }
+          }
+        ],
+        "output_name": "feature_views"
+      }
+    ]
+  },
+  "evaluation": {
+    "metric_ids": ["r2_v1", "mse_v1"],
+    "y_true_key": "y",
+    "compute_train": true,
+    "compute_valid": true
+  },
+  "context": {
+    "timeout_s": 60
+  }
+}
