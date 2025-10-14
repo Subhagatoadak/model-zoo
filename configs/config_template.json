@@ -1,0 +1,68 @@
+{
+  "model": {
+    "id": "your_model_id",
+    "name": "Human Friendly Name",
+    "version": "0.1.0",
+    "kind": "library",
+    "tags": ["tag1", "tag2"],
+    "metadata": {},
+    "binding": {
+      "module": "path.to.module",
+      "callable": "callable_name"
+    }
+  },
+  "hyperparameters": {
+    "schema": [
+      {
+        "name": "param_name",
+        "dtype": "string",
+        "default": "value",
+        "description": "What this parameter controls"
+      }
+    ],
+    "values": [
+      {
+        "model_id": "your_model_id",
+        "param": "param_name",
+        "value": "value",
+        "env": "dev"
+      }
+    ]
+  },
+  "variables": {
+    "definitions": [
+      {
+        "name": "feature_name",
+        "source": "input_key",
+        "include": true,
+        "transforms": [
+          {
+            "id": "identity",
+            "params": {}
+          }
+        ],
+        "metadata": {}
+      }
+    ],
+    "groups": [
+      {
+        "id": "group_id",
+        "variables": ["feature_name"],
+        "transforms": [],
+        "output_name": "optional_output"
+      }
+    ]
+  },
+  "evaluation": {
+    "metric_ids": ["metric_id"],
+    "y_true_key": "y",
+    "compute_train": true,
+    "compute_valid": true,
+    "train_indices": [],
+    "test_indices": []
+  },
+  "context": {
+    "timeout_s": 60,
+    "resources": {}
+  }
+}
