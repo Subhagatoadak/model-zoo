@@ -54,8 +54,14 @@ Client → FastAPI (uvicorn) → RegistryDatabase (psycopg) → PostgreSQL
    ```bash
    curl -X POST http://localhost:8000/registry/configs \
         -H "Content-Type: application/json" \
-        -d @<(jq -n --argfile cfg configs/linear_regression.json \
+         -d @<(jq -n --argfile cfg configs/linear_regression.json \
              '{env:"dev", config:$cfg}')
+   ```
+
+   Or run the scripted helper:
+
+   ```bash
+   python examples/register_model_via_api.py --config configs/linear_regression.json --env dev
    ```
 
 4. List registered models:
@@ -186,4 +192,3 @@ Use `configs/linear_regression.json` as a template. The API validates types and 
 - Integrate the API with CI/CD to deploy automatically after changes.
 - Add unit tests for API routes using `fastapi.testclient` and temporary Postgres containers (e.g., `pytest-postgresql`).
 - Provide SDK helpers that wrap the HTTP calls for Python clients.
-
