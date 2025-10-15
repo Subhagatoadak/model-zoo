@@ -78,7 +78,8 @@ Client → FastAPI (uvicorn) → RegistryDatabase (psycopg) → PostgreSQL
    curl http://localhost:8000/registry/models/linear_regression_v1 | jq
    ```
 
-6. Submit a run using the stored configuration (synthetic linear data):
+6. Submit a run using the stored configuration (synthetic linear data). The
+   endpoint is asynchronous and returns immediately with a run ticket:
 
    ```bash
    curl -X POST http://localhost:8000/runs \
@@ -95,10 +96,17 @@ Client → FastAPI (uvicorn) → RegistryDatabase (psycopg) → PostgreSQL
                 "y_true_key": "y"
               }
             }'
+   # => {"run_id": "...", "status": "queued"}
    ```
 
-   The response includes the run status, diagnostics, evaluation metrics, and a
-   rendered summary string. You can also use the helper script:
+   Poll the ticket using `GET /runs/{run_id}` (the helper script handles this):
+
+   ```bash
+   curl http://localhost:8000/runs/<run_id> | jq
+   ```
+
+   Once the run completes the payload includes diagnostics, evaluation metrics,
+   and the rendered summary string. You can also use the helper script:
 
    ```bash
    python examples/register_model_via_api.py --config configs/linear_regression.json --env dev --run
@@ -138,7 +146,12 @@ A configuration JSON must include the following sections:
 
 - `model`: id, name, version, kind (`library`/`api`/`pipeline`), optional tags/metadata.
 - `hyperparameters`: `schema` (list of rows) and `values` (engine table).
-- `coefficients`: intercept + per-variable priors (distribution + parameters) kept separate from runtime hyperparameters.
+  Optional `tables` entries let you pull additional rows from CSV/JSON files.
+- `coefficient_priors`: intercept + per-variable priors (`distribution`, nested
+  `params`, and optional `constraints`) kept separate from runtime
+  hyperparameters. Priors can be supplied inline or via CSV/JSON tables.
+  Constraints support `sign` (`positive`, `negative`, `nonnegative`, etc.) and
+  `lower` / `upper` bounds for truncated priors.
 - `variables`: `definitions` (source, transforms) and optional `groups`.
 - `evaluation`: metric ids, target key, split options.
 - `context`: execution hints (timeout, device, resources).
@@ -155,6 +168,9 @@ Use `configs/linear_regression.json` as a template. The API validates types and 
 | GET    | `/registry/models`                 | List all registered model specs               |
 | GET    | `/registry/models/{model_id}`      | Fetch spec plus associated configs            |
 | GET    | `/registry/models/{model_id}/configs` | List configs (optionally filter by env)    |
+| POST   | `/runs`                            | Submit a run (asynchronous, returns ticket)   |
+| GET    | `/runs`                            | List run tickets and their status             |
+| GET    | `/runs/{run_id}`                   | Fetch status/result for a submitted run       |
 
 ## Response Examples
 

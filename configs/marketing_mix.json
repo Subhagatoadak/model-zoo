@@ -37,29 +37,18 @@
       {"model_id": "pymc_marketing_mix_v1", "param": "sigma_rate", "value": 1.0, "env": "dev"}
     ]
   },
-  "coefficients": {
+  "coefficient_priors": {
     "intercept": {
       "distribution": "normal",
-      "mu": 100.0,
-      "sigma": 20.0
+      "params": {"mu": 100.0, "sigma": 20.0},
+      "constraints": {"sign": "positive"}
     },
-    "variables": [
+    "variables": [],
+    "tables": [
       {
-        "name": "tv",
-        "distribution": "normal",
-        "mu": 2.0,
-        "sigma": 1.0
-      },
-      {
-        "name": "radio",
-        "distribution": "half_normal",
-        "sigma": 1.0
-      },
-      {
-        "name": "social",
-        "distribution": "gamma",
-        "shape": 2.0,
-        "rate": 1.0
+        "path": "configs/marketing_mix_coefficients.csv",
+        "format": "csv",
+        "env": "dev"
       }
     ]
   },

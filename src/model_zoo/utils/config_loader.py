@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 import json
+import csv
 
 from .config_tables import hyperparam_space_from_master, params_from_engine
 from ..contracts.hyperparams import HyperParamSpace
@@ -140,12 +141,14 @@ class CoefficientDefinition:
     name: Optional[str]
     distribution: str
     params: Dict[str, Any] = field(default_factory=dict)
+    constraints: Dict[str, Any] = field(default_factory=dict)
 
-    def as_dict(self, include_name: bool = True) -> Dict[str, Any]:
-        data = {"distribution": self.distribution}
-        data.update(self.params)
+    def as_prior_dict(self, include_name: bool = True) -> Dict[str, Any]:
+        data = {"distribution": self.distribution, "params": dict(self.params)}
         if include_name and self.name is not None:
             data["name"] = self.name
+        if self.constraints:
+            data["constraints"] = dict(self.constraints)
         return data
 
 
@@ -155,15 +158,27 @@ class CoefficientConfig:
     variables: Dict[str, CoefficientDefinition]
 
     def to_runner_params(self) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {}
+        priors: Dict[str, Any] = {}
+        constraints: Dict[str, Any] = {}
         if self.intercept:
-            payload["intercept"] = self.intercept.as_dict(include_name=False)
+            priors["intercept"] = self.intercept.as_prior_dict(include_name=False)
+            if self.intercept.constraints:
+                constraints["intercept"] = dict(self.intercept.constraints)
         if self.variables:
-            payload["variables"] = [coeff.as_dict() for coeff in self.variables.values()]
-        return payload
-
-    def get_variable(self, name: str) -> Optional[CoefficientDefinition]:
-        return self.variables.get(name)
+            priors["variables"] = [coeff.as_prior_dict() for coeff in self.variables.values()]
+            var_constraints = {
+                name: dict(coeff.constraints)
+                for name, coeff in self.variables.items()
+                if coeff.constraints
+            }
+            if var_constraints:
+                constraints["variables"] = var_constraints
+        runner_params: Dict[str, Any] = {}
+        if priors:
+            runner_params["coefficient_priors"] = priors
+        if constraints:
+            runner_params["coefficient_constraints"] = constraints
+        return runner_params
 
 
 @dataclass
@@ -254,7 +269,40 @@ def _select_env_entry(data: Any, env: Optional[str]) -> Optional[Dict[str, Any]]
     return None
 
 
+def _undot_keys(payload: Dict[str, Any]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    for key, value in payload.items():
+        if "." in key:
+            parts = key.split(".")
+            cursor = result
+            for part in parts[:-1]:
+                cursor = cursor.setdefault(part, {})
+            cursor[parts[-1]] = value
+        else:
+            result[key] = value
+    return result
+
+
+def _clean_mapping(data: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned: Dict[str, Any] = {}
+    for key, value in data.items():
+        if value in ("", None):
+            continue
+        if isinstance(value, dict):
+            nested = _clean_mapping(value)
+            if nested:
+                cleaned[key] = nested
+        elif isinstance(value, list):
+            cleaned_list = [item for item in value if item not in ("", None)]
+            if cleaned_list:
+                cleaned[key] = cleaned_list
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
 def _parse_coefficient_definition(payload: Dict[str, Any], require_name: bool) -> CoefficientDefinition:
+    payload = _undot_keys(payload)
     name = payload.get("name")
     if require_name:
         if not name or not str(name).strip():
@@ -263,12 +311,56 @@ def _parse_coefficient_definition(payload: Dict[str, Any], require_name: bool) -
     else:
         name = None
     distribution = str(payload.get("distribution") or "normal").strip().lower()
-    params = {k: v for k, v in payload.items() if k not in {"name", "distribution", "env"}}
-    return CoefficientDefinition(name=name, distribution=distribution, params=params)
+    params_payload = payload.get("params")
+    if isinstance(params_payload, dict):
+        params = _clean_mapping(dict(params_payload))
+    else:
+        params = {
+            k: v
+            for k, v in payload.items()
+            if k not in {"name", "distribution", "env", "constraints"}
+            and not isinstance(v, dict)  # skip nested structures like params/constraints
+        }
+    params = _clean_mapping(params)
+    constraints_payload = payload.get("constraints") or {}
+    if not isinstance(constraints_payload, dict):
+        raise ValueError("Coefficient constraints must be provided as a mapping")
+    constraints = _clean_mapping(dict(constraints_payload))
+    return CoefficientDefinition(name=name, distribution=distribution, params=params, constraints=constraints)
 
 
-def _extract_coefficients(payload: Dict[str, Any], env: Optional[str]) -> CoefficientConfig:
-    section = payload.get("coefficients") or {}
+def _load_table_content(entry: Dict[str, Any], base_path: Optional[Path]) -> List[Dict[str, Any]]:
+    if "content" in entry and entry["content"] is not None:
+        data = entry["content"]
+        if isinstance(data, list):
+            return [dict(row) for row in data if isinstance(row, dict)]
+        raise ValueError("Table content must be a list of mappings")
+    path_value = entry.get("path")
+    if not path_value:
+        raise ValueError("Coefficient table entry requires either 'content' or 'path'")
+    path_obj = Path(path_value)
+    if not path_obj.is_absolute():
+        if base_path is not None:
+            path_obj = (base_path / path_obj).resolve()
+        else:
+            path_obj = Path.cwd() / path_obj
+    if not path_obj.exists():
+        raise FileNotFoundError(f"Coefficient table not found: {path_obj}")
+    fmt = str(entry.get("format") or path_obj.suffix.lstrip(".") or "csv").lower()
+    if fmt == "csv":
+        with path_obj.open(newline="", encoding=entry.get("encoding", "utf-8")) as handle:
+            reader = csv.DictReader(handle)
+            return [dict(row) for row in reader]
+    if fmt in ("json", "jsonl"):
+        data = json.loads(path_obj.read_text(encoding=entry.get("encoding", "utf-8")))
+        if isinstance(data, list):
+            return [dict(row) for row in data if isinstance(row, dict)]
+        raise ValueError("JSON coefficient table must decode to a list of mappings")
+    raise ValueError(f"Unsupported coefficient table format: {fmt}")
+
+
+def _extract_coefficients(payload: Dict[str, Any], env: Optional[str], base_path: Optional[Path]) -> CoefficientConfig:
+    section = payload.get("coefficient_priors") or payload.get("coefficients") or {}
     intercept_entry = section.get("intercept")
     intercept = None
     if intercept_entry is not None:
@@ -287,6 +379,16 @@ def _extract_coefficients(payload: Dict[str, Any], env: Optional[str]) -> Coeffi
             if not _matches_env(raw.get("env"), env):
                 continue
             coeff = _parse_coefficient_definition(raw, require_name=True)
+            variables[coeff.name] = coeff
+    tables = section.get("tables") or []
+    for table_entry in tables:
+        if not isinstance(table_entry, dict):
+            continue
+        if not _matches_env(table_entry.get("env"), env):
+            continue
+        rows = _load_table_content(table_entry, base_path)
+        for row in rows:
+            coeff = _parse_coefficient_definition(row, require_name=True)
             variables[coeff.name] = coeff
     return CoefficientConfig(intercept=intercept, variables=variables)
 
@@ -307,7 +409,7 @@ def _extract_evaluation(payload: Dict[str, Any], env: Optional[str]) -> Optional
     return None
 
 
-def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optional[str], model_id: Optional[str]) -> ModelConfiguration:
+def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optional[str], model_id: Optional[str], base_path: Optional[Path] = None) -> ModelConfiguration:
     model_section = payload.get("model") or {}
     config_model_id = model_section.get("id") or model_section.get("model_id")
     if model_id is None and config_model_id is None:
@@ -322,10 +424,17 @@ def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optiona
     space = hyperparam_space_from_master(master_rows)
 
     engine_rows = [row for row in hyper_section.get("values", []) if _matches_env(row.get("env"), env)]
+    for table_entry in hyper_section.get("tables", []) or []:
+        if not isinstance(table_entry, dict):
+            continue
+        if not _matches_env(table_entry.get("env"), env):
+            continue
+        table_rows = _load_table_content(table_entry, base_path)
+        engine_rows.extend(table_rows)
     params = params_from_engine(engine_rows, model_id=final_model_id, master=space, env=env)
 
     variables = _extract_variables(payload, env)
-    coefficients = _extract_coefficients(payload, env)
+    coefficients = _extract_coefficients(payload, env, base_path)
     evaluation = _extract_evaluation(payload, env)
 
     context = payload.get("context") or {}
@@ -357,12 +466,13 @@ def load_model_configuration(path: str | Path, env: Optional[str] = None, model_
     if not resolved_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {resolved_path}")
     payload = _load_json(resolved_path)
-    return _load_model_configuration_from_payload(payload, env=env, model_id=model_id)
+    return _load_model_configuration_from_payload(payload, env=env, model_id=model_id, base_path=resolved_path.parent)
 
 
-def load_model_configuration_from_dict(payload: Dict[str, Any], env: Optional[str] = None, model_id: Optional[str] = None) -> ModelConfiguration:
+def load_model_configuration_from_dict(payload: Dict[str, Any], env: Optional[str] = None, model_id: Optional[str] = None, base_path: Optional[str | Path] = None) -> ModelConfiguration:
     """Load a configuration from an in-memory dictionary."""
 
     if not isinstance(payload, dict):
         raise ValueError("Configuration payload must be a mapping")
-    return _load_model_configuration_from_payload(dict(payload), env=env, model_id=model_id)
+    path_obj = Path(base_path) if base_path is not None else None
+    return _load_model_configuration_from_payload(dict(payload), env=env, model_id=model_id, base_path=path_obj)

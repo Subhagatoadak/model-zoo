@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from enum import Enum
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
@@ -31,6 +32,11 @@ from ..bindings.base import ExecutionBinding, BindingKind
 from ..utils.summary import r_style_summary_string
 
 import time
+import uuid
+from datetime import datetime
+from dataclasses import dataclass, field
+from threading import Lock
+from concurrent.futures import ThreadPoolExecutor
 
 
 class RegistryDatabase:
@@ -238,6 +244,8 @@ model_registry = ModelRegistry()
 metric_registry = MetricRegistry()
 binding_registry = InMemoryBindingRegistry()
 validator: ParamValidationService = DefaultParamValidator()
+run_manager = RunManager()
+run_executor = ThreadPoolExecutor(max_workers=4)
 
 app = FastAPI(title="Model Zoo Registry API", version="0.1.0")
 
@@ -304,6 +312,20 @@ class RunResponse(BaseModel):
     eval_valid: Dict[str, float] = Field(default_factory=dict)
     summary: Dict[str, Any] = Field(default_factory=dict)
     summary_text: Optional[str] = None
+
+
+class RunSubmissionResponse(BaseModel):
+    run_id: str
+    status: str
+
+
+class RunStatusResponse(BaseModel):
+    run_id: str
+    status: str
+    submitted_at: str
+    completed_at: Optional[str] = None
+    result: Optional[RunResponse] = None
+    error: Optional[str] = None
 
 
 def _register_model_spec_from_configuration(cfg: ModelConfiguration) -> ModelSpec:
@@ -524,129 +546,118 @@ def list_model_configs(model_id: str, env: Optional[str] = None, db: RegistryDat
     return configs
 
 
-@app.post("/runs", response_model=RunResponse, tags=["runs"], status_code=status.HTTP_201_CREATED)
-def submit_run(payload: RunRequest, db: RegistryDatabase = Depends(get_database)) -> RunResponse:
+def _execute_async_run(run_id: str, cfg: ModelConfiguration, payload: RunRequest) -> None:
+    run_manager.mark_running(run_id)
+    try:
+        result = _perform_model_run(cfg, payload)
+    except Exception as exc:  # pragma: no cover - background execution
+        run_manager.mark_failed(run_id, str(exc))
+    else:
+        run_manager.mark_succeeded(run_id, result)
+
+
+def _job_to_status(job: AsyncRunJob) -> RunStatusResponse:
+    return RunStatusResponse(
+        run_id=job.run_id,
+        status=job.status.value,
+        submitted_at=job.submitted_at.isoformat(),
+        completed_at=job.completed_at.isoformat() if job.completed_at else None,
+        result=job.result,
+        error=job.error,
+    )
+
+
+@app.post("/runs", response_model=RunSubmissionResponse, tags=["runs"], status_code=status.HTTP_202_ACCEPTED)
+def submit_run(payload: RunRequest, db: RegistryDatabase = Depends(get_database)) -> RunSubmissionResponse:
     stored_config = db.get_config(payload.model_id, payload.env)
     if stored_config is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Configuration not found for model '{payload.model_id}'")
 
     try:
-        cfg = load_model_configuration_from_dict(stored_config, env=payload.env, model_id=payload.model_id)
+        cfg = load_model_configuration_from_dict(
+            stored_config,
+            env=payload.env,
+            model_id=payload.model_id,
+            base_path=Path.cwd(),
+        )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid configuration payload: {exc}") from exc
 
-    model_spec = _register_model_spec_from_configuration(cfg)
+    _register_model_spec_from_configuration(cfg)
 
-    try:
-        variables, grouped = build_variables(cfg.variables, payload.data_sources)
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to build variables: {exc}") from exc
+    run_id = str(uuid.uuid4())
+    run_manager.create_job(run_id)
+    payload_copy = RunRequest(**payload.dict())
+    run_executor.submit(_execute_async_run, run_id, cfg, payload_copy)
+    return RunSubmissionResponse(run_id=run_id, status=AsyncRunStatus.QUEUED.value)
 
-    combined = dict(variables)
-    combined.update(grouped)
-    input_keys = payload.inputs or cfg.model.get("inputs") or list(variables.keys())
-    inputs: Dict[str, DataRef] = {}
-    for key in input_keys:
-        if key not in combined:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input key '{key}' not produced by configuration")
-        inputs[key] = DataRef(ref_type=DataRefType.INLINE, inline=combined[key])
 
-    params = dict(cfg.params)
-    params.update(payload.params or {})
+@app.get("/runs/{run_id}", response_model=RunStatusResponse, tags=["runs"])
+def get_run_status(run_id: str) -> RunStatusResponse:
+    job = run_manager.get_job(run_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run '{run_id}' not found")
+    return _job_to_status(job)
 
-    coeff_payload = cfg.coefficients.to_runner_params()
-    if coeff_payload:
-        existing_coeffs = params.get("coefficients") if isinstance(params.get("coefficients"), dict) else {}
-        merged: Dict[str, Any] = dict(existing_coeffs)
-        if "intercept" in coeff_payload and "intercept" not in merged:
-            merged["intercept"] = coeff_payload["intercept"]
-        if "variables" in coeff_payload:
-            merged_vars = []
-            seen = set()
-            if isinstance(merged.get("variables"), list):
-                for item in merged["variables"]:
-                    if isinstance(item, dict) and "name" in item:
-                        seen.add(item["name"])
-                    merged_vars.append(item)
-            for item in coeff_payload["variables"]:
-                if isinstance(item, dict):
-                    name = item.get("name")
-                    if name and name in seen:
-                        continue
-                merged_vars.append(item)
-                if isinstance(item, dict) and "name" in item:
-                    seen.add(item["name"])
-            merged["variables"] = merged_vars
-        params["coefficients"] = merged
 
-    context_dict = dict(cfg.context)
-    context_dict.update(payload.context or {})
-    context = ExecutionContext(**context_dict)
+@app.get("/runs", response_model=List[RunStatusResponse], tags=["runs"])
+def list_runs() -> List[RunStatusResponse]:
+    return [_job_to_status(job) for job in run_manager.list_jobs()]
+class AsyncRunStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
-    target_key = None
-    if payload.evaluation is not None:
-        target_key = payload.evaluation.y_true_key
-    elif cfg.evaluation is not None:
-        target_key = cfg.evaluation.y_true_key
-    total_length = 0
-    if target_key and isinstance(combined.get(target_key), list):
-        total_length = len(combined[target_key])
-    else:
-        for key in input_keys:
-            value = combined.get(key)
-            if isinstance(value, list):
-                total_length = len(value)
-                break
 
-    eval_spec = _prepare_evaluation(cfg, payload.evaluation, total_length)
+@dataclass
+class AsyncRunJob:
+    run_id: str
+    status: AsyncRunStatus
+    submitted_at: datetime = field(default_factory=lambda: datetime.utcnow())
+    completed_at: Optional[datetime] = None
+    result: Optional[RunResponse] = None
+    error: Optional[str] = None
 
-    runner = LibraryModelRunner(max_workers=1, max_active_runs=1)
-    runner.set_run_store(InMemoryRunStore())
-    metric_runner = LibraryMetricRunner()
-    zoo = ModelZoo(
-        model_registry=model_registry,
-        metric_registry=metric_registry,
-        model_runner=runner,
-        metric_runner=metric_runner,
-        validator=validator,
-        binding_registry=binding_registry,
-    )
 
-    req = ModelRunRequest(
-        model_id=model_spec.model_id,
-        inputs=inputs,
-        params=params,
-        context=context,
-        evaluation=eval_spec,
-    )
+class RunManager:
+    def __init__(self) -> None:
+        self._jobs: Dict[str, AsyncRunJob] = {}
+        self._lock = Lock()
 
-    handle = zoo.submit_run(req)
+    def create_job(self, run_id: str) -> AsyncRunJob:
+        job = AsyncRunJob(run_id=run_id, status=AsyncRunStatus.QUEUED)
+        with self._lock:
+            self._jobs[run_id] = job
+        return job
 
-    timeout = context.timeout_s or 300
-    deadline = time.monotonic() + float(timeout)
-    while True:
-        res = zoo.get_run_result(handle.run_id)
-        if res.status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED):
-            break
-        if time.monotonic() > deadline:
-            break
-        time.sleep(0.05)
+    def mark_running(self, run_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(run_id)
+            if job:
+                job.status = AsyncRunStatus.RUNNING
 
-    result = zoo.get_run_result(handle.run_id)
-    summary_text = None
-    try:
-        summary_text = r_style_summary_string(result.summary) if result.summary else None
-    except Exception:
-        summary_text = None
+    def mark_succeeded(self, run_id: str, result: RunResponse) -> None:
+        with self._lock:
+            job = self._jobs.get(run_id)
+            if job:
+                job.status = AsyncRunStatus.SUCCEEDED
+                job.result = result
+                job.completed_at = datetime.utcnow()
 
-    return RunResponse(
-        run_id=handle.run_id,
-        status=result.status.value,
-        predictions=_dataref_payload(result.predictions),
-        diagnostics=result.diagnostics or {},
-        artifacts=_artifacts_payload(result.artifacts or {}),
-        eval_train=result.eval_train or {},
-        eval_valid=result.eval_valid or {},
-        summary=result.summary or {},
-        summary_text=summary_text,
-    )
+    def mark_failed(self, run_id: str, error: str) -> None:
+        with self._lock:
+            job = self._jobs.get(run_id)
+            if job:
+                job.status = AsyncRunStatus.FAILED
+                job.error = error
+                job.completed_at = datetime.utcnow()
+
+    def get_job(self, run_id: str) -> Optional[AsyncRunJob]:
+        with self._lock:
+            return self._jobs.get(run_id)
+
+    def list_jobs(self) -> List[AsyncRunJob]:
+        with self._lock:
+            return list(self._jobs.values())

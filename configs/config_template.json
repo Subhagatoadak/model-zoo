@@ -27,20 +27,31 @@
         "value": "value",
         "env": "dev"
       }
+    ],
+    "tables": [
+      {
+        "path": "configs/example_hyperparameters.csv",
+        "format": "csv"
+      }
     ]
   },
-  "coefficients": {
+  "coefficient_priors": {
     "intercept": {
       "distribution": "normal",
-      "mu": 0.0,
-      "sigma": 10.0
+      "params": {"mu": 0.0, "sigma": 10.0}
     },
     "variables": [
       {
         "name": "feature_name",
         "distribution": "normal",
-        "mu": 0.0,
-        "sigma": 1.0
+        "params": {"mu": 0.0, "sigma": 1.0},
+        "constraints": {"sign": "positive"}
+      }
+    ],
+    "tables": [
+      {
+        "path": "configs/example_coefficients.csv",
+        "format": "csv"
       }
     ]
   },

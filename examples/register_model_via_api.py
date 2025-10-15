@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
 from urllib import error, request, parse
@@ -37,6 +38,19 @@ def _get_json(url: str) -> Dict[str, Any]:
     with request.urlopen(url) as resp:
         body = resp.read().decode("utf-8")
         return json.loads(body) if body else {}
+
+
+def _poll_run(base_url: str, run_id: str, timeout: float = 600.0, interval: float = 0.5) -> Dict[str, Any]:
+    status_url = parse.urljoin(base_url.rstrip("/") + "/", f"runs/{run_id}")
+    deadline = time.time() + timeout
+    while True:
+        status_payload = _get_json(status_url)
+        status = status_payload.get("status")
+        if status in {"succeeded", "failed", "cancelled"}:
+            return status_payload
+        if time.time() >= deadline:
+            raise TimeoutError(f"Run {run_id} did not finish within {timeout} seconds")
+        time.sleep(interval)
 
 
 def main() -> None:
@@ -100,13 +114,21 @@ def main() -> None:
         }
         runs_endpoint = parse.urljoin(args.base_url.rstrip("/") + "/", "runs")
         try:
-            run_response = _post_json(runs_endpoint, run_payload)
+            submission = _post_json(runs_endpoint, run_payload)
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise SystemExit(f"Run submission failed ({exc.code}): {detail}")
 
-        print("Run response:")
-        print(json.dumps(run_response, indent=2))
+        run_ticket = submission.get("run_id")
+        print(f"Submitted run: {run_ticket} (status={submission.get('status')})")
+        status_payload = _poll_run(args.base_url, run_ticket)
+        print("Run status:")
+        print(json.dumps(status_payload, indent=2))
+
+        result_payload = status_payload.get("result") or {}
+        if result_payload:
+            print("Diagnostics (coefficients):")
+            print(json.dumps(result_payload.get("diagnostics", {}).get("coefficients_model", {}), indent=2))
 
 
 if __name__ == "__main__":

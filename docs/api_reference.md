@@ -100,8 +100,10 @@ This reference describes each module, class, and method in the Model Zoo, with e
 
 ## Examples — Scripts (bhm_pymc/)
 - register_and_run.py — End‑to‑end registration + binding registry + inline evaluation + event bus + timeout/retry/conc.
-- marketing_mix_pymc_example.py — Bayesian marketing mix with coefficient-driven priors (intercept + variables) and R-style summaries.
-- marketing_mix_pymc_hier_example.py — Hierarchical MMM (geo/brand) with mixed priors; R‑style summaries.
+- marketing_mix_pymc_example.py — Bayesian marketing mix with `coefficient_priors`
+  (intercept + variables, constraints) and R-style summaries.
+- marketing_mix_pymc_hier_example.py — Hierarchical MMM (geo/brand) with
+  `coefficient_priors`, constraints, and R-style summaries.
 
 ---
 

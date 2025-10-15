@@ -5,7 +5,7 @@ Contains:
 - `pymc_hierarchical_mmm`: hierarchical MMM with geo/brand random intercepts
 """
 from __future__ import annotations
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 
 def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) -> Dict[str, Any]:
@@ -64,7 +64,10 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
     progressbar = bool(params.get("progressbar", False))
     compute_convergence_checks = bool(params.get("compute_convergence_checks", False))
 
-    coeff_cfg = params.get("coefficients") if isinstance(params.get("coefficients"), dict) else {}
+    coeff_cfg = params.get("coefficient_priors") if isinstance(params.get("coefficient_priors"), dict) else None
+    if coeff_cfg is None:
+        coeff_cfg = params.get("coefficients") if isinstance(params.get("coefficients"), dict) else {}
+    constraints_cfg = params.get("coefficient_constraints") if isinstance(params.get("coefficient_constraints"), dict) else {}
     priors = params.get("priors", {}) or {}
     use_coefficients = bool(coeff_cfg)
 
@@ -86,17 +89,24 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
     with pm.Model() as model:
         # Intercept prior
         if use_coefficients and coeff_cfg.get("intercept"):
-            intercept_cfg = coeff_cfg["intercept"] or {}
-            intercept_dist = str(intercept_cfg.get("distribution", "normal")).lower()
-            if intercept_dist in ("normal",):
-                alpha_mu = float(intercept_cfg.get("mu", intercept_cfg.get("mean", 0.0)))
-                alpha_sigma = float(intercept_cfg.get("sigma", intercept_cfg.get("tau", 10.0)))
-                alpha = pm.Normal("alpha", mu=alpha_mu, sigma=alpha_sigma)
-            elif intercept_dist in ("half_normal", "halfnormal"):
-                alpha_sigma = float(intercept_cfg.get("sigma", intercept_cfg.get("scale", 10.0)))
-                alpha = pm.HalfNormal("alpha", sigma=alpha_sigma)
-            else:
-                raise ValueError(f"Unsupported intercept distribution: {intercept_dist}")
+            intercept_entry = coeff_cfg.get("intercept") or {}
+            intercept_params = dict(intercept_entry.get("params") or {})
+            if not intercept_params:
+                for key in ("mu", "mean", "sigma", "tau", "scale", "shape", "rate"):
+                    if key in intercept_entry:
+                        intercept_params[key] = intercept_entry[key]
+            intercept_constraints = _merge_constraints(
+                intercept_entry.get("constraints"),
+                constraints_cfg.get("intercept") if isinstance(constraints_cfg, dict) else None,
+            )
+            intercept_dist = str(intercept_entry.get("distribution", "normal")).lower()
+            alpha = _build_coefficient_rv(
+                pm,
+                name="alpha",
+                distribution=intercept_dist,
+                params_dict=intercept_params,
+                constraints=intercept_constraints,
+            )
         else:
             alpha = pm.Normal("alpha", mu=0.0, sigma=10.0)
 
@@ -111,20 +121,28 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
             for name in feature_names:
                 spec = variable_cfg.get(name, {})
                 dist_i = str(spec.get("distribution", "normal")).lower()
+                params_dict = dict(spec.get("params") or {})
+                if not params_dict:
+                    for key in ("mu", "mean", "sigma", "tau", "scale", "shape", "rate"):
+                        if key in spec:
+                            params_dict[key] = spec[key]
+                spec_constraints = dict(spec.get("constraints") or {})
+                combined_constraints = _merge_constraints(
+                    spec_constraints,
+                    (constraints_cfg.get("variables") or {}).get(name)
+                    if isinstance(constraints_cfg.get("variables"), dict)
+                    else None,
+                )
                 rv_name = f"beta_{name}".replace(" ", "_").replace("[", "_").replace("]", "_")
-                if dist_i in ("normal",):
-                    mu_i = float(spec.get("mu", spec.get("mean", 0.0)))
-                    sigma_i = float(spec.get("sigma", spec.get("tau", 10.0)))
-                    beta_vars.append(pm.Normal(rv_name, mu=mu_i, sigma=sigma_i))
-                elif dist_i in ("half_normal", "halfnormal"):
-                    sigma_i = float(spec.get("sigma", spec.get("scale", 1.0)))
-                    beta_vars.append(pm.HalfNormal(rv_name, sigma=sigma_i))
-                elif dist_i in ("gamma", "erlang"):
-                    shape_i = float(spec.get("shape", 2.0))
-                    rate_i = float(spec.get("rate", 1.0))
-                    beta_vars.append(pm.Gamma(rv_name, alpha=shape_i, beta=rate_i))
-                else:
-                    raise ValueError(f"Unsupported coefficient distribution for '{name}': {dist_i}")
+                beta_vars.append(
+                    _build_coefficient_rv(
+                        pm,
+                        name=rv_name,
+                        distribution=dist_i,
+                        params_dict=params_dict,
+                        constraints=combined_constraints,
+                    )
+                )
         else:
             beta_prior = priors.get("beta", {})
             beta_dist_raw = beta_prior.get("distribution", "normal")
@@ -153,7 +171,8 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
                     beta_vars.append(pm.Normal(rv_name, mu=mu_i, sigma=tau_i))
                 elif dist_i in ("half_normal", "halfnormal"):
                     scale_i = _legacy_param("scale", 1.0, i)
-                    beta_vars.append(pm.HalfNormal(rv_name, sigma=scale_i))
+                    base = pm.HalfNormal(f"{rv_name}_base", sigma=scale_i)
+                    beta_vars.append(pm.Deterministic(rv_name, base))
                 elif dist_i in ("gamma", "erlang"):
                     shape_i = _legacy_param("shape", 2.0, i)
                     rate_i = _legacy_param("rate", 1.0, i)
@@ -210,6 +229,7 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
         diagnostics["coefficients_model"][f"coef[{name}]"] = float(beta_mean_vec[i])
 
     metadata_coeffs = coeff_cfg if use_coefficients else {"legacy_priors": priors.get("beta")}
+    metadata_coeffs = coeff_cfg if use_coefficients else {"legacy_priors": priors.get("beta")}
     sigma_meta = {"distribution": sigma_dist}
     if sigma_dist in ("half_normal", "halfnormal"):
         sigma_meta["scale"] = sigma_scale
@@ -223,7 +243,7 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
         "metadata": {
             "model": "pymc_linear_nuts",
             "feature_names": feature_names,
-            "coefficients": metadata_coeffs,
+            "coefficient_priors": metadata_coeffs,
             "sigma": sigma_meta,
         },
     }
@@ -291,7 +311,10 @@ def pymc_hierarchical_mmm(inputs: Dict[str, Any], params: Dict[str, Any], contex
     progressbar = bool(params.get("progressbar", False))
     compute_convergence_checks = bool(params.get("compute_convergence_checks", False))
 
-    coeff_cfg = params.get("coefficients") if isinstance(params.get("coefficients"), dict) else {}
+    coeff_cfg = params.get("coefficient_priors") if isinstance(params.get("coefficient_priors"), dict) else None
+    if coeff_cfg is None:
+        coeff_cfg = params.get("coefficients") if isinstance(params.get("coefficients"), dict) else {}
+    constraints_cfg = params.get("coefficient_constraints") if isinstance(params.get("coefficient_constraints"), dict) else {}
     priors = params.get("priors", {}) or {}
     use_coefficients = bool(coeff_cfg)
 
@@ -312,17 +335,24 @@ def pymc_hierarchical_mmm(inputs: Dict[str, Any], params: Dict[str, Any], contex
 
     with pm.Model() as model:
         if use_coefficients and coeff_cfg.get("intercept"):
-            intercept_cfg = coeff_cfg["intercept"] or {}
-            intercept_dist = str(intercept_cfg.get("distribution", "normal")).lower()
-            if intercept_dist in ("normal",):
-                alpha_mu = float(intercept_cfg.get("mu", intercept_cfg.get("mean", 0.0)))
-                alpha_sigma = float(intercept_cfg.get("sigma", intercept_cfg.get("tau", 10.0)))
-                alpha = pm.Normal("alpha", mu=alpha_mu, sigma=alpha_sigma)
-            elif intercept_dist in ("half_normal", "halfnormal"):
-                alpha_sigma = float(intercept_cfg.get("sigma", intercept_cfg.get("scale", 10.0)))
-                alpha = pm.HalfNormal("alpha", sigma=alpha_sigma)
-            else:
-                raise ValueError(f"Unsupported intercept distribution: {intercept_dist}")
+            intercept_entry = coeff_cfg.get("intercept") or {}
+            intercept_params = dict(intercept_entry.get("params") or {})
+            if not intercept_params:
+                for key in ("mu", "mean", "sigma", "tau", "scale", "shape", "rate"):
+                    if key in intercept_entry:
+                        intercept_params[key] = intercept_entry[key]
+            intercept_constraints = _merge_constraints(
+                intercept_entry.get("constraints"),
+                constraints_cfg.get("intercept") if isinstance(constraints_cfg, dict) else None,
+            )
+            intercept_dist = str(intercept_entry.get("distribution", "normal")).lower()
+            alpha = _build_coefficient_rv(
+                pm,
+                name="alpha",
+                distribution=intercept_dist,
+                params_dict=intercept_params,
+                constraints=intercept_constraints,
+            )
         else:
             alpha = pm.Normal("alpha", mu=0.0, sigma=10.0)
         # Hierarchical intercepts
@@ -341,20 +371,28 @@ def pymc_hierarchical_mmm(inputs: Dict[str, Any], params: Dict[str, Any], contex
             for name in feature_names:
                 spec = variable_cfg.get(name, {})
                 dist_i = str(spec.get("distribution", "normal")).lower()
+                params_dict = dict(spec.get("params") or {})
+                if not params_dict:
+                    for key in ("mu", "mean", "sigma", "tau", "scale", "shape", "rate"):
+                        if key in spec:
+                            params_dict[key] = spec[key]
+                spec_constraints = dict(spec.get("constraints") or {})
+                combined_constraints = _merge_constraints(
+                    spec_constraints,
+                    (constraints_cfg.get("variables") or {}).get(name)
+                    if isinstance(constraints_cfg.get("variables"), dict)
+                    else None,
+                )
                 rv_name = f"beta_{name}".replace(" ", "_").replace("[", "_").replace("]", "_")
-                if dist_i in ("normal",):
-                    mu_i = float(spec.get("mu", spec.get("mean", 0.0)))
-                    sigma_i = float(spec.get("sigma", spec.get("tau", 10.0)))
-                    beta_vars.append(pm.Normal(rv_name, mu=mu_i, sigma=sigma_i))
-                elif dist_i in ("half_normal", "halfnormal"):
-                    sigma_i = float(spec.get("sigma", spec.get("scale", 1.0)))
-                    beta_vars.append(pm.HalfNormal(rv_name, sigma=sigma_i))
-                elif dist_i in ("gamma", "erlang"):
-                    shape_i = float(spec.get("shape", 2.0))
-                    rate_i = float(spec.get("rate", 1.0))
-                    beta_vars.append(pm.Gamma(rv_name, alpha=shape_i, beta=rate_i))
-                else:
-                    raise ValueError(f"Unsupported coefficient distribution for '{name}': {dist_i}")
+                beta_vars.append(
+                    _build_coefficient_rv(
+                        pm,
+                        name=rv_name,
+                        distribution=dist_i,
+                        params_dict=params_dict,
+                        constraints=combined_constraints,
+                    )
+                )
         else:
             beta_prior = priors.get("beta", {})
             beta_dist_raw = beta_prior.get("distribution", "normal")
@@ -475,7 +513,73 @@ def pymc_hierarchical_mmm(inputs: Dict[str, Any], params: Dict[str, Any], contex
             "brand_key": brand_key,
             "geos": geos,
             "brands": brands,
-            "coefficients": coeff_cfg if use_coefficients else {"legacy_priors": priors.get("beta")},
+            "coefficient_priors": metadata_coeffs,
             "sigma": sigma_meta,
         },
     }
+def _merge_constraints(*entries: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    for entry in entries:
+        if not entry:
+            continue
+        for key, value in entry.items():
+            if value is not None:
+                merged[key] = value
+    return merged
+
+
+def _derive_bounds(constraints: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+    sign = (constraints.get("sign") or "").lower() if constraints else ""
+    lower = constraints.get("lower") if constraints else None
+    upper = constraints.get("upper") if constraints else None
+    lower = float(lower) if lower is not None else None
+    upper = float(upper) if upper is not None else None
+
+    if sign in ("positive", "nonnegative"):
+        lower = 0.0 if lower is None else max(0.0, lower)
+    elif sign in ("negative", "nonpositive"):
+        upper = 0.0 if upper is None else min(0.0, upper)
+    elif sign == "zero":
+        lower = upper = 0.0
+    return lower, upper, sign if sign else None
+
+
+def _build_coefficient_rv(
+    pm_module,
+    name: str,
+    distribution: str,
+    params_dict: Dict[str, Any],
+    constraints: Dict[str, Any],
+) -> Any:
+    distribution = distribution.lower()
+    lower, upper, sign_flag = _derive_bounds(constraints)
+
+    if distribution in ("normal",):
+        mu = float(params_dict.get("mu", params_dict.get("mean", 0.0)))
+        sigma = float(params_dict.get("sigma", params_dict.get("tau", 10.0)))
+        trunc_args: Dict[str, float] = {}
+        if lower is not None:
+            trunc_args["lower"] = lower
+        if upper is not None:
+            trunc_args["upper"] = upper
+        if trunc_args:
+            return pm_module.TruncatedNormal(name, mu=mu, sigma=sigma, **trunc_args)
+        return pm_module.Normal(name, mu=mu, sigma=sigma)
+
+    if distribution in ("half_normal", "halfnormal"):
+        sigma = float(params_dict.get("sigma", params_dict.get("scale", 1.0)))
+        base = pm_module.HalfNormal(f"{name}_base", sigma=sigma)
+        if sign_flag in ("negative", "nonpositive") or (upper is not None and upper <= 0.0):
+            return pm_module.Deterministic(name, -base)
+        if lower is not None and lower > 0.0:
+            return pm_module.Deterministic(name, base + lower)
+        return pm_module.Deterministic(name, base)
+
+    if distribution in ("gamma", "erlang"):
+        shape = float(params_dict.get("shape", params_dict.get("alpha", 2.0)))
+        rate = float(params_dict.get("rate", params_dict.get("beta", 1.0)))
+        if lower is not None or upper is not None:
+            raise ValueError("Bounds are not supported for gamma coefficient priors")
+        return pm_module.Gamma(name, alpha=shape, beta=rate)
+
+    raise ValueError(f"Unsupported coefficient distribution: {distribution}")

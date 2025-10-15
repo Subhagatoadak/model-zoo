@@ -1,0 +1,3 @@
+name,distribution,params.mu,params.sigma,constraints.sign
+feature_a,normal,1.0,0.5,positive
+feature_b,half_normal,,1.0,nonnegative

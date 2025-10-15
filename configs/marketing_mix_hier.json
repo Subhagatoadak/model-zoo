@@ -39,29 +39,29 @@
       {"model_id": "pymc_hier_mmm_v1", "param": "sigma_rate", "value": 1.0, "env": "dev"}
     ]
   },
-  "coefficients": {
+  "coefficient_priors": {
     "intercept": {
       "distribution": "normal",
-      "mu": 80.0,
-      "sigma": 20.0
+      "params": {"mu": 80.0, "sigma": 20.0}
     },
     "variables": [
       {
         "name": "tv",
         "distribution": "normal",
-        "mu": 2.0,
-        "sigma": 1.0
+        "params": {"mu": 2.0, "sigma": 1.0},
+        "constraints": {"sign": "positive"}
       },
       {
         "name": "radio",
         "distribution": "half_normal",
-        "sigma": 1.0
+        "params": {"sigma": 1.0},
+        "constraints": {"sign": "nonnegative"}
       },
       {
         "name": "social",
         "distribution": "gamma",
-        "shape": 2.0,
-        "rate": 1.0
+        "params": {"shape": 2.0, "rate": 1.0},
+        "constraints": {"lower": 0.0}
       }
     ]
   },
