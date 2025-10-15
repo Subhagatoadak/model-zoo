@@ -218,7 +218,7 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
             "alpha": alpha_mean,
             "dv_sigma": float(idata.posterior["sigma"].values.mean())
         },
-        "param_values": {
+        "hyperparameters_model": {
             "draws": draws,
             "tune": tune,
             "target_accept": target_accept,
@@ -481,7 +481,7 @@ def pymc_hierarchical_mmm(inputs: Dict[str, Any], params: Dict[str, Any], contex
             "sigma_brand": sigma_brand_mean,
             "dv_sigma": float(idata.posterior["sigma"].values.mean()),
         },
-        "param_values": {
+        "hyperparameters_model": {
             "draws": draws,
             "tune": tune,
             "target_accept": target_accept,
