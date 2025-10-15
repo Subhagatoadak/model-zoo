@@ -20,7 +20,8 @@ dependencies = [
   "seaborn>=0.13",
   "psycopg[binary]>=3.1",
   "fastapi>=0.110",
-  "uvicorn[standard]>=0.27"
+  "uvicorn[standard]>=0.27",
+  "pymc"
 ]
 
 [project.optional-dependencies]

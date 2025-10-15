@@ -138,6 +138,7 @@ A configuration JSON must include the following sections:
 
 - `model`: id, name, version, kind (`library`/`api`/`pipeline`), optional tags/metadata.
 - `hyperparameters`: `schema` (list of rows) and `values` (engine table).
+- `coefficients`: intercept + per-variable priors (distribution + parameters) kept separate from runtime hyperparameters.
 - `variables`: `definitions` (source, transforms) and optional `groups`.
 - `evaluation`: metric ids, target key, split options.
 - `context`: execution hints (timeout, device, resources).

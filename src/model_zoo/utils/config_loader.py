@@ -136,6 +136,37 @@ class VariableConfig:
 
 
 @dataclass
+class CoefficientDefinition:
+    name: Optional[str]
+    distribution: str
+    params: Dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self, include_name: bool = True) -> Dict[str, Any]:
+        data = {"distribution": self.distribution}
+        data.update(self.params)
+        if include_name and self.name is not None:
+            data["name"] = self.name
+        return data
+
+
+@dataclass
+class CoefficientConfig:
+    intercept: Optional[CoefficientDefinition]
+    variables: Dict[str, CoefficientDefinition]
+
+    def to_runner_params(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if self.intercept:
+            payload["intercept"] = self.intercept.as_dict(include_name=False)
+        if self.variables:
+            payload["variables"] = [coeff.as_dict() for coeff in self.variables.values()]
+        return payload
+
+    def get_variable(self, name: str) -> Optional[CoefficientDefinition]:
+        return self.variables.get(name)
+
+
+@dataclass
 class EvaluationConfig:
     metric_ids: List[str]
     y_true_key: str
@@ -177,6 +208,7 @@ class ModelConfiguration:
     hyperparam_space: HyperParamSpace
     params: Dict[str, Any]
     variables: VariableConfig
+    coefficients: CoefficientConfig
     evaluation: Optional[EvaluationConfig]
     context: Dict[str, Any]
 
@@ -204,6 +236,59 @@ def _extract_variables(payload: Dict[str, Any], env: Optional[str]) -> VariableC
             continue
         groups.append(VariableGroup.from_dict(row))
     return VariableConfig(definitions=definitions, groups=groups)
+
+
+def _select_env_entry(data: Any, env: Optional[str]) -> Optional[Dict[str, Any]]:
+    if isinstance(data, list):
+        fallback = None
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            if _matches_env(item.get("env"), env):
+                return item
+            if fallback is None and _matches_env(item.get("env"), None):
+                fallback = item
+        return fallback
+    if isinstance(data, dict) and _matches_env(data.get("env"), env):
+        return data
+    return None
+
+
+def _parse_coefficient_definition(payload: Dict[str, Any], require_name: bool) -> CoefficientDefinition:
+    name = payload.get("name")
+    if require_name:
+        if not name or not str(name).strip():
+            raise ValueError("Coefficient variable definitions require a 'name'")
+        name = str(name).strip()
+    else:
+        name = None
+    distribution = str(payload.get("distribution") or "normal").strip().lower()
+    params = {k: v for k, v in payload.items() if k not in {"name", "distribution", "env"}}
+    return CoefficientDefinition(name=name, distribution=distribution, params=params)
+
+
+def _extract_coefficients(payload: Dict[str, Any], env: Optional[str]) -> CoefficientConfig:
+    section = payload.get("coefficients") or {}
+    intercept_entry = section.get("intercept")
+    intercept = None
+    if intercept_entry is not None:
+        chosen = _select_env_entry(intercept_entry, env)
+        if chosen:
+            intercept = _parse_coefficient_definition(chosen, require_name=False)
+
+    variables_entries = section.get("variables") or []
+    variables: Dict[str, CoefficientDefinition] = {}
+    if isinstance(variables_entries, dict):
+        variables_entries = [variables_entries]
+    if isinstance(variables_entries, list):
+        for raw in variables_entries:
+            if not isinstance(raw, dict):
+                continue
+            if not _matches_env(raw.get("env"), env):
+                continue
+            coeff = _parse_coefficient_definition(raw, require_name=True)
+            variables[coeff.name] = coeff
+    return CoefficientConfig(intercept=intercept, variables=variables)
 
 
 def _extract_evaluation(payload: Dict[str, Any], env: Optional[str]) -> Optional[EvaluationConfig]:
@@ -240,6 +325,7 @@ def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optiona
     params = params_from_engine(engine_rows, model_id=final_model_id, master=space, env=env)
 
     variables = _extract_variables(payload, env)
+    coefficients = _extract_coefficients(payload, env)
     evaluation = _extract_evaluation(payload, env)
 
     context = payload.get("context") or {}
@@ -252,6 +338,7 @@ def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optiona
         hyperparam_space=space,
         params=params,
         variables=variables,
+        coefficients=coefficients,
         evaluation=evaluation,
         context=context,
     )

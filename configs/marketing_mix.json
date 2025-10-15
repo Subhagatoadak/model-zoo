@@ -19,7 +19,10 @@
       {"name": "cores", "dtype": "int", "default": 1},
       {"name": "compute_convergence_checks", "dtype": "bool", "default": true},
       {"name": "feature_names", "dtype": "list", "default": ["tv", "radio", "social"]},
-      {"name": "priors", "dtype": "dict", "default": null}
+      {"name": "sigma_distribution", "dtype": "string", "default": "half_normal"},
+      {"name": "sigma_scale", "dtype": "float", "default": 5.0},
+      {"name": "sigma_shape", "dtype": "float", "default": 2.0},
+      {"name": "sigma_rate", "dtype": "float", "default": 1.0}
     ],
     "values": [
       {"model_id": "pymc_marketing_mix_v1", "param": "draws", "value": 400, "env": "dev"},
@@ -28,21 +31,35 @@
       {"model_id": "pymc_marketing_mix_v1", "param": "chains", "value": 4, "env": "dev"},
       {"model_id": "pymc_marketing_mix_v1", "param": "cores", "value": 1, "env": "dev"},
       {"model_id": "pymc_marketing_mix_v1", "param": "compute_convergence_checks", "value": "true", "env": "dev"},
+      {"model_id": "pymc_marketing_mix_v1", "param": "sigma_distribution", "value": "half_normal", "env": "dev"},
+      {"model_id": "pymc_marketing_mix_v1", "param": "sigma_scale", "value": 5.0, "env": "dev"},
+      {"model_id": "pymc_marketing_mix_v1", "param": "sigma_shape", "value": 2.0, "env": "dev"},
+      {"model_id": "pymc_marketing_mix_v1", "param": "sigma_rate", "value": 1.0, "env": "dev"}
+    ]
+  },
+  "coefficients": {
+    "intercept": {
+      "distribution": "normal",
+      "mu": 100.0,
+      "sigma": 20.0
+    },
+    "variables": [
       {
-        "model_id": "pymc_marketing_mix_v1",
-        "param": "priors",
-        "value": {
-          "beta": {
-            "distribution": ["normal", "half_normal", "gamma"],
-            "mu": [2.0, null, null],
-            "tau": [1.0, null, null],
-            "scale": [null, 1.0, null],
-            "shape": [null, null, 2.0],
-            "rate": [null, null, 1.0]
-          },
-          "sigma": {"distribution": "half_normal", "scale": 5.0}
-        },
-        "env": "dev"
+        "name": "tv",
+        "distribution": "normal",
+        "mu": 2.0,
+        "sigma": 1.0
+      },
+      {
+        "name": "radio",
+        "distribution": "half_normal",
+        "sigma": 1.0
+      },
+      {
+        "name": "social",
+        "distribution": "gamma",
+        "shape": 2.0,
+        "rate": 1.0
       }
     ]
   },

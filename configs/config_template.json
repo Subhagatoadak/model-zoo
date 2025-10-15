@@ -29,6 +29,21 @@
       }
     ]
   },
+  "coefficients": {
+    "intercept": {
+      "distribution": "normal",
+      "mu": 0.0,
+      "sigma": 10.0
+    },
+    "variables": [
+      {
+        "name": "feature_name",
+        "distribution": "normal",
+        "mu": 0.0,
+        "sigma": 1.0
+      }
+    ]
+  },
   "metrics": [
     {
       "metric_id": "metric_identifier",

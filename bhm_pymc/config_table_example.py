@@ -144,6 +144,9 @@ def main(env: str, config_path: str, env_file: str, model_id: str | None, points
 
     params = dict(cfg.params)
     params.setdefault("train_indices", train_idx)
+    coeff_payload = cfg.coefficients.to_runner_params()
+    if coeff_payload and "coefficients" not in params:
+        params["coefficients"] = coeff_payload
 
     evaluation = build_evaluation(cfg.evaluation, train_idx, test_idx)
 

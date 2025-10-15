@@ -135,6 +135,9 @@ def build_evaluation(cfg: ModelConfiguration, train_idx: List[int], test_idx: Li
 def submit_run(zoo: ModelZoo, cfg: ModelConfiguration, inputs: Dict[str, DataRef], train_idx: List[int], test_idx: List[int]) -> str:
     params = dict(cfg.params)
     params.setdefault("train_indices", train_idx)
+    coeff_payload = cfg.coefficients.to_runner_params()
+    if coeff_payload and "coefficients" not in params:
+        params["coefficients"] = coeff_payload
     context = ExecutionContext(**cfg.context)
     evaluation = build_evaluation(cfg, train_idx, test_idx)
     req = ModelRunRequest(

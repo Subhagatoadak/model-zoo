@@ -554,6 +554,31 @@ def submit_run(payload: RunRequest, db: RegistryDatabase = Depends(get_database)
     params = dict(cfg.params)
     params.update(payload.params or {})
 
+    coeff_payload = cfg.coefficients.to_runner_params()
+    if coeff_payload:
+        existing_coeffs = params.get("coefficients") if isinstance(params.get("coefficients"), dict) else {}
+        merged: Dict[str, Any] = dict(existing_coeffs)
+        if "intercept" in coeff_payload and "intercept" not in merged:
+            merged["intercept"] = coeff_payload["intercept"]
+        if "variables" in coeff_payload:
+            merged_vars = []
+            seen = set()
+            if isinstance(merged.get("variables"), list):
+                for item in merged["variables"]:
+                    if isinstance(item, dict) and "name" in item:
+                        seen.add(item["name"])
+                    merged_vars.append(item)
+            for item in coeff_payload["variables"]:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    if name and name in seen:
+                        continue
+                merged_vars.append(item)
+                if isinstance(item, dict) and "name" in item:
+                    seen.add(item["name"])
+            merged["variables"] = merged_vars
+        params["coefficients"] = merged
+
     context_dict = dict(cfg.context)
     context_dict.update(payload.context or {})
     context = ExecutionContext(**context_dict)

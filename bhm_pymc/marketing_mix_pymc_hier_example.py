@@ -165,6 +165,9 @@ def submit_run(zoo: ModelZoo, cfg: ModelConfiguration, inputs: Dict[str, DataRef
     params.setdefault("feature_names", feature_names)
     params.setdefault("geo_key", "geo")
     params.setdefault("brand_key", "brand")
+    coeff_payload = cfg.coefficients.to_runner_params()
+    if coeff_payload and "coefficients" not in params:
+        params["coefficients"] = coeff_payload
     context = ExecutionContext(**cfg.context)
     evaluation = build_evaluation(cfg, train_idx, test_idx)
     req = ModelRunRequest(

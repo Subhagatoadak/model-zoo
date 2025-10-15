@@ -35,8 +35,9 @@ What the demo covers
 - Submitting runs with `EvaluationSpec` to compute train/validation metrics
 - Viewing R-style summaries with named coefficients
 
-Configuring priors
-- Conjugate demo (normal/gamma): pass `priors` on the ModelRunRequest params
+Configuring coefficients and priors
+- Config-driven PyMC examples read intercept/variable priors from the `coefficients` section so sampler hyperparameters (draws, tune, target_accept, etc.) remain separate.
+- Conjugate demo (normal/gamma): still accepts `priors` on the ModelRunRequest params for backwards compatibility.
 - PyMC NUTS beta prior: normal (scalar or per-feature vectors)
 - PyMC NUTS sigma prior: half_normal (scale), gamma/erlang (shape, rate)
 
