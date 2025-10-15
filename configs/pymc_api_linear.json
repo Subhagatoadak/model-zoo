@@ -1,0 +1,40 @@
+{
+  "model": {
+    "id": "pymc_api_linear_v1",
+    "name": "PyMC API Linear Regression",
+    "version": "1.0.0",
+    "kind": "api",
+    "binding": {
+      "kind": "api",
+      "endpoint": "http://pymc_api:8100/runs",
+      "method": "POST"
+    },
+    "inputs": ["X", "y"]
+  },
+  "hyperparameters": {
+    "schema": [
+      {
+        "name": "scale",
+        "dtype": "float",
+        "default": 1.0,
+        "description": "Placeholder hyperparameter"
+      }
+    ],
+    "values": [
+      {
+        "model_id": "pymc_api_linear_v1",
+        "param": "scale",
+        "value": "1.0"
+      }
+    ]
+  },
+  "variables": {
+    "definitions": [
+      {"name": "X", "source": "x_values"},
+      {"name": "y", "source": "y_values"}
+    ]
+  },
+  "context": {
+    "timeout_s": 120
+  }
+}

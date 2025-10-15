@@ -33,6 +33,7 @@ class ModelSpec:
         hyperparams: Hyperparameter space/schema for validation and tooling.
         tags: Optional list of tags for discovery/organization.
         metadata: Arbitrary, implementation‑specific metadata.
+        dependencies: Normalized list of pip-style dependency constraints required for execution.
     """
     model_id: str
     name: str
@@ -41,6 +42,7 @@ class ModelSpec:
     hyperparams: HyperParamSpace
     tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    dependencies: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize this spec into a JSON‑serializable dictionary.
@@ -57,6 +59,7 @@ class ModelSpec:
             "hyperparams_schema": self.hyperparams.to_json_schema(),
             "tags": self.tags,
             "metadata": self.metadata,
+            "dependencies": self.dependencies,
         }
 
 class ModelRegistry:

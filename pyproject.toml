@@ -22,7 +22,8 @@ dependencies = [
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
   "pymc",
-  "pandas"
+  "pandas",
+  "packaging>=23.0"
 ]
 
 [project.optional-dependencies]

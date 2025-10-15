@@ -33,5 +33,12 @@ services:
     volumes:
       - ./configs:/app/configs:ro
 
+  pymc_api:
+    build: ./examples/pymc_api_service
+    container_name: model-zoo-pymc-api
+    restart: unless-stopped
+    ports:
+      - "8100:8100"
+
 volumes:
   postgres_data:

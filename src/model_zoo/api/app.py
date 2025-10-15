@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from enum import Enum
@@ -30,6 +31,10 @@ from ..utils.env import read_env_file, build_postgres_dsn
 from ..bindings.registry import InMemoryBindingRegistry
 from ..bindings.base import ExecutionBinding, BindingKind
 from ..utils.summary import r_style_summary_string
+from ..utils.dependency_manager import (
+    DependencyManager,
+    DependencyResolutionError,
+)
 
 import time
 import uuid
@@ -71,10 +76,14 @@ class RegistryDatabase:
                         hyperparams JSONB NOT NULL,
                         tags JSONB DEFAULT '[]'::jsonb,
                         metadata JSONB DEFAULT '{}'::jsonb,
+                        dependencies JSONB DEFAULT '[]'::jsonb,
                         registered_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW()
                     )
                     """
+                )
+                cur.execute(
+                    "ALTER TABLE model_specs ADD COLUMN IF NOT EXISTS dependencies JSONB DEFAULT '[]'::jsonb"
                 )
 
     def upsert_config(self, model_id: str, environment: Optional[str], config: Dict[str, Any]) -> None:
@@ -96,8 +105,8 @@ class RegistryDatabase:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO model_specs (model_id, name, version, kind, hyperparams, tags, metadata, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    INSERT INTO model_specs (model_id, name, version, kind, hyperparams, tags, metadata, dependencies, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (model_id) DO UPDATE
                     SET name = EXCLUDED.name,
                         version = EXCLUDED.version,
@@ -105,6 +114,7 @@ class RegistryDatabase:
                         hyperparams = EXCLUDED.hyperparams,
                         tags = EXCLUDED.tags,
                         metadata = EXCLUDED.metadata,
+                        dependencies = EXCLUDED.dependencies,
                         updated_at = NOW()
                     """,
                     (
@@ -115,6 +125,7 @@ class RegistryDatabase:
                         Json(spec.hyperparams.to_json_schema()),
                         Json(spec.tags),
                         Json(spec.metadata),
+                        Json(spec.dependencies),
                     ),
                 )
 
@@ -122,7 +133,7 @@ class RegistryDatabase:
         with psycopg.connect(self._dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT model_id, name, version, kind, hyperparams, tags, metadata, registered_at, updated_at FROM model_specs ORDER BY model_id"
+                    "SELECT model_id, name, version, kind, hyperparams, tags, metadata, dependencies, registered_at, updated_at FROM model_specs ORDER BY model_id"
                 )
                 rows = cur.fetchall()
         specs = []
@@ -136,8 +147,9 @@ class RegistryDatabase:
                     "hyperparams": row[4],
                     "tags": row[5],
                     "metadata": row[6],
-                    "registered_at": row[7].isoformat() if row[7] else None,
-                    "updated_at": row[8].isoformat() if row[8] else None,
+                    "dependencies": row[7],
+                    "registered_at": row[8].isoformat() if row[8] else None,
+                    "updated_at": row[9].isoformat() if row[9] else None,
                 }
             )
         return specs
@@ -146,7 +158,7 @@ class RegistryDatabase:
         with psycopg.connect(self._dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT model_id, name, version, kind, hyperparams, tags, metadata, registered_at, updated_at FROM model_specs WHERE model_id = %s",
+                    "SELECT model_id, name, version, kind, hyperparams, tags, metadata, dependencies, registered_at, updated_at FROM model_specs WHERE model_id = %s",
                     (model_id,),
                 )
                 row = cur.fetchone()
@@ -160,8 +172,9 @@ class RegistryDatabase:
             "hyperparams": row[4],
             "tags": row[5],
             "metadata": row[6],
-            "registered_at": row[7].isoformat() if row[7] else None,
-            "updated_at": row[8].isoformat() if row[8] else None,
+            "dependencies": row[7],
+            "registered_at": row[8].isoformat() if row[8] else None,
+            "updated_at": row[9].isoformat() if row[9] else None,
         }
 
     def list_configs(self, model_id: str, environment: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -244,6 +257,7 @@ model_registry = ModelRegistry()
 metric_registry = MetricRegistry()
 binding_registry = InMemoryBindingRegistry()
 validator: ParamValidationService = DefaultParamValidator()
+dependency_manager = DependencyManager()
 
 app = FastAPI(title="Model Zoo Registry API", version="0.1.0")
 
@@ -269,6 +283,7 @@ class ModelSpecRequest(BaseModel):
     hyperparameters: List[Dict[str, Any]] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    dependencies: List[str] = Field(default_factory=list)
 
 
 class ModelSpecResponse(BaseModel):
@@ -279,6 +294,7 @@ class ModelSpecResponse(BaseModel):
     hyperparams: Dict[str, Any]
     tags: List[str]
     metadata: Dict[str, Any]
+    dependencies: List[str]
 
 
 class RunEvaluationRequest(BaseModel):
@@ -326,8 +342,35 @@ class RunStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+def _validate_binding_callable(binding: ExecutionBinding) -> None:
+    if binding.kind != BindingKind.LIBRARY:
+        return
+    if not binding.module or not binding.callable:
+        raise DependencyResolutionError("Library bindings must include 'module' and 'callable'")
+    try:
+        module = import_module(binding.module)
+    except ModuleNotFoundError as exc:
+        raise DependencyResolutionError(f"Unable to import module '{binding.module}': {exc}") from exc
+    try:
+        func = getattr(module, binding.callable)
+    except AttributeError as exc:
+        raise DependencyResolutionError(
+            f"Module '{binding.module}' does not define callable '{binding.callable}'"
+        ) from exc
+    if not callable(func):
+        raise DependencyResolutionError(
+            f"Attribute '{binding.callable}' on module '{binding.module}' is not callable"
+        )
+
+
 def _register_model_spec_from_configuration(cfg: ModelConfiguration) -> ModelSpec:
     model_info = cfg.model
+    dependencies = list(cfg.dependencies)
+
+    metadata = dict(model_info.get("metadata") or {})
+    if dependencies:
+        metadata.setdefault("dependencies", dependencies)
+
     spec = ModelSpec(
         model_id=model_info["id"],
         name=model_info.get("name", model_info["id"]),
@@ -335,7 +378,8 @@ def _register_model_spec_from_configuration(cfg: ModelConfiguration) -> ModelSpe
         kind=ModelKind[model_info.get("kind", "library").upper()],
         hyperparams=cfg.hyperparam_space,
         tags=model_info.get("tags", []),
-        metadata=model_info.get("metadata", {}),
+        metadata=metadata,
+        dependencies=dependencies,
     )
     try:
         model_registry.register(spec)
@@ -345,13 +389,66 @@ def _register_model_spec_from_configuration(cfg: ModelConfiguration) -> ModelSpe
 
     binding_info = model_info.get("binding") or {}
     if binding_info:
-        binding = ExecutionBinding(
-            bound_id=spec.model_id,
-            kind=BindingKind.LIBRARY if (binding_info.get("kind") or "library").lower() == "library" else BindingKind.API,
-            module=binding_info["module"],
-            callable=binding_info["callable"],
-        )
-        binding_registry.register_model_binding(spec.model_id, binding)
+        kind_value = str(binding_info.get("kind") or spec.kind.value).lower()
+        try:
+            binding_kind = BindingKind(kind_value)
+        except ValueError as exc:
+            raise DependencyResolutionError(f"Unsupported binding kind: {kind_value}") from exc
+
+        binding: Optional[ExecutionBinding] = None
+        extra_paths: List[str] = []
+
+        if binding_kind == BindingKind.LIBRARY:
+            if dependencies:
+                dep_env = dependency_manager.ensure(dependencies)
+                if dep_env is not None:
+                    dependency_manager.apply(dep_env)
+                    extra_paths = dep_env.import_paths
+            try:
+                module_name = binding_info["module"].strip()
+                callable_name = binding_info["callable"].strip()
+            except KeyError as exc:
+                raise DependencyResolutionError("Library binding requires both 'module' and 'callable'") from exc
+            if not module_name or not callable_name:
+                raise DependencyResolutionError("Library binding requires non-empty 'module' and 'callable'")
+            binding = ExecutionBinding(
+                bound_id=spec.model_id,
+                kind=binding_kind,
+                module=module_name,
+                callable=callable_name,
+                dependencies=tuple(dependencies),
+                extra_paths=extra_paths,
+            )
+            _validate_binding_callable(binding)
+        elif binding_kind == BindingKind.API:
+            endpoint = str(binding_info.get("endpoint") or binding_info.get("url") or "").strip()
+            if not endpoint:
+                raise DependencyResolutionError("API binding requires an 'endpoint'")
+            method = str(binding_info.get("method") or "POST").upper()
+            options = binding_info.get("options") or {}
+            if not isinstance(options, dict):
+                raise DependencyResolutionError("API binding 'options' must be a mapping if provided")
+            binding = ExecutionBinding(
+                bound_id=spec.model_id,
+                kind=binding_kind,
+                endpoint=endpoint,
+                method=method,
+                options=options,
+            )
+        else:
+            # Basic passthrough for other kinds; additional handling can be added per deployment.
+            binding = ExecutionBinding(
+                bound_id=spec.model_id,
+                kind=binding_kind,
+                module=binding_info.get("module"),
+                callable=binding_info.get("callable"),
+                endpoint=binding_info.get("endpoint"),
+                method=binding_info.get("method"),
+                options=binding_info.get("options", {}),
+            )
+
+        if binding is not None:
+            binding_registry.register_model_binding(spec.model_id, binding)
 
     metrics_cfg = cfg.raw.get("metrics") or []
     for metric in metrics_cfg:
@@ -400,6 +497,11 @@ def _register_simple_model_spec(payload: ModelSpecRequest) -> ModelSpec:
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid hyperparameter schema: {exc}") from exc
 
+    try:
+        normalized_dependencies = dependency_manager.normalize(payload.dependencies)
+    except DependencyResolutionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     spec = ModelSpec(
         model_id=payload.model_id,
         name=payload.name,
@@ -408,6 +510,7 @@ def _register_simple_model_spec(payload: ModelSpecRequest) -> ModelSpec:
         hyperparams=hyperparams,
         tags=payload.tags,
         metadata=payload.metadata,
+        dependencies=normalized_dependencies,
     )
     try:
         model_registry.register(spec)
@@ -480,6 +583,78 @@ def _prepare_evaluation(
     return spec
 
 
+def _perform_api_binding_run(
+    cfg: ModelConfiguration,
+    payload: RunRequest,
+    binding: ExecutionBinding,
+    inputs: Dict[str, DataRef],
+    params: Dict[str, Any],
+    context_dict: Dict[str, Any],
+    eval_spec: Optional[EvaluationSpec],
+) -> RunResponse:
+    try:
+        import requests
+    except Exception as exc:  # pragma: no cover - optional import message
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="The 'requests' package is required for API bindings") from exc
+
+    serialized_inputs: Dict[str, Any] = {}
+    for name, ref in inputs.items():
+        if ref.ref_type == DataRefType.INLINE:
+            serialized_inputs[name] = ref.inline
+        else:
+            serialized_inputs[name] = ref.to_dict()
+
+    request_payload: Dict[str, Any] = {
+        "model_id": cfg.model["id"],
+        "inputs": serialized_inputs,
+        "params": params,
+        "context": context_dict,
+    }
+    if eval_spec is not None:
+        request_payload["evaluation"] = eval_spec.to_dict()
+
+    method = (binding.method or "POST").upper()
+    timeout = float(context_dict.get("timeout_s", 300))
+
+    try:
+        resp = requests.request(method, binding.endpoint, json=request_payload, timeout=timeout)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"API binding call failed: {exc}") from exc
+
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="API binding response was not valid JSON") from exc
+
+    run_id = str(data.get("run_id") or uuid.uuid4())
+    run_status = str(data.get("status") or RunStatus.SUCCEEDED.value)
+    predictions = data.get("predictions")
+    diagnostics = data.get("diagnostics") or {}
+    artifacts = data.get("artifacts") or {}
+    eval_train = data.get("eval_train") or {}
+    eval_valid = data.get("eval_valid") or {}
+    summary = data.get("summary") or {}
+    summary_text = None
+    if summary:
+        try:
+            summary_text = r_style_summary_string(summary)
+        except Exception:
+            summary_text = None
+
+    return RunResponse(
+        run_id=run_id,
+        status=run_status,
+        predictions=predictions,
+        diagnostics=diagnostics,
+        artifacts=artifacts,
+        eval_train=eval_train,
+        eval_valid=eval_valid,
+        summary=summary,
+        summary_text=summary_text,
+    )
+
+
 def _perform_model_run(cfg: ModelConfiguration, payload: RunRequest) -> RunResponse:
     variables, grouped = build_variables(cfg.variables, payload.data_sources)
     combined: Dict[str, Any] = dict(variables)
@@ -523,6 +698,16 @@ def _perform_model_run(cfg: ModelConfiguration, payload: RunRequest) -> RunRespo
                 break
 
     eval_spec = _prepare_evaluation(cfg, payload.evaluation, total_length)
+
+    model_binding: Optional[ExecutionBinding] = None
+    if binding_registry is not None:
+        try:
+            model_binding = binding_registry.get_model_binding(cfg.model["id"])
+        except Exception:
+            model_binding = None
+
+    if model_binding is not None and model_binding.kind == BindingKind.API:
+        return _perform_api_binding_run(cfg, payload, model_binding, inputs, params, context_dict, eval_spec)
 
     runner = LibraryModelRunner(max_workers=1, max_active_runs=1)
     runner.set_run_store(InMemoryRunStore())
@@ -591,7 +776,10 @@ def register_configuration(payload: ConfigRegistrationRequest, db: RegistryDatab
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    spec = _register_model_spec_from_configuration(cfg)
+    try:
+        spec = _register_model_spec_from_configuration(cfg)
+    except DependencyResolutionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.upsert_config(spec.model_id, payload.env, cfg.raw)
 
     response_spec = {
@@ -602,6 +790,7 @@ def register_configuration(payload: ConfigRegistrationRequest, db: RegistryDatab
         "hyperparams_schema": spec.hyperparams.to_json_schema(),
         "tags": spec.tags,
         "metadata": spec.metadata,
+        "dependencies": spec.dependencies,
     }
     return ConfigRegistrationResponse(model_id=spec.model_id, environment=payload.env, spec=response_spec)
 
@@ -617,6 +806,7 @@ def register_model_spec(payload: ModelSpecRequest) -> ModelSpecResponse:
         hyperparams=spec.hyperparams.to_json_schema(),
         tags=spec.tags,
         metadata=spec.metadata,
+        dependencies=spec.dependencies,
     )
 
 
@@ -680,7 +870,10 @@ def submit_run(payload: RunRequest, db: RegistryDatabase = Depends(get_database)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid configuration payload: {exc}") from exc
 
-    _register_model_spec_from_configuration(cfg)
+    try:
+        _register_model_spec_from_configuration(cfg)
+    except DependencyResolutionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     run_id = str(uuid.uuid4())
     run_manager.create_job(run_id)

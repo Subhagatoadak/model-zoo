@@ -4,6 +4,7 @@ Supports concurrency limits, timeouts, retries with backoff, cooperative
 cancellation, run persistence, and event-friendly logging metadata.
 """
 from __future__ import annotations
+import sys
 from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -263,6 +264,12 @@ class LibraryModelRunner(ModelRunner):
         return binding
 
     def _resolve_callable(self, binding: ExecutionBinding) -> Callable[..., Any]:
+        if getattr(binding, "extra_paths", None):
+            for path in binding.extra_paths:
+                if not path:
+                    continue
+                if path not in sys.path:
+                    sys.path.insert(0, path)
         mod = import_module(binding.module)
         func = getattr(mod, binding.callable)
         if not callable(func):

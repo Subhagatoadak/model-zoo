@@ -31,6 +31,14 @@ This script demonstrates:
 - Getting an R‑style summary string with named coefficients and metrics.
 - Library models: simple OLS, conjugate Bayesian, sklearn LinearRegression, PyMC NUTS.
 
+Bring your own package
+- Package your callable into a wheel (or publish it internally) and declare it in the
+  configuration `dependencies`. The registry will install those requirements into a
+  cached site-packages directory before importing the binding.
+- See `docs/notebooks/custom_model_registration_demo.ipynb` for an end-to-end walkthrough.
+- Prefer calling out-of-process APIs instead? Spin up the sample PyMC service (`docker compose up pymc_api`)
+  and follow `docs/notebooks/api_pymc_model_demo.ipynb` for registering an `api` binding and running it.
+
 Core concepts
 - Model registry: declares a `ModelSpec` with `HyperParamSpace` only.
 - Metric registry: declares `EvalMetricSpec` (direction + parameters).

@@ -7,7 +7,7 @@ options.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from enum import Enum
 
 class BindingKind(Enum):
@@ -35,6 +35,8 @@ class ExecutionBinding:
     orchestrator: Optional[str] = None
     options: Dict[str, Any] = field(default_factory=dict)
     mcp: Optional[Any] = None
+    dependencies: Tuple[str, ...] = field(default_factory=tuple)
+    extra_paths: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a JSON‑serializable dictionary for logs/APIs."""
@@ -43,5 +45,8 @@ class ExecutionBinding:
             "endpoint": self.endpoint, "method": self.method,
             "module": self.module, "callable": self.callable,
             "pipeline_id": self.pipeline_id, "orchestrator": self.orchestrator,
-            "options": self.options, "mcp": None if self.mcp is None else self.mcp.__dict__,
+            "options": self.options,
+            "mcp": None if self.mcp is None else self.mcp.__dict__,
+            "dependencies": list(self.dependencies),
+            "extra_paths": list(self.extra_paths),
         }

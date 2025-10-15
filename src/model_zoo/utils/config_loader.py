@@ -226,6 +226,7 @@ class ModelConfiguration:
     coefficients: CoefficientConfig
     evaluation: Optional[EvaluationConfig]
     context: Dict[str, Any]
+    dependencies: List[str] = field(default_factory=list)
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -409,6 +410,80 @@ def _extract_evaluation(payload: Dict[str, Any], env: Optional[str]) -> Optional
     return None
 
 
+def _as_dependency_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        return [value] if value else []
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+        result: List[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("Dependency entries must be strings")
+            item_clean = item.strip()
+            if item_clean:
+                result.append(item_clean)
+        return result
+    raise ValueError("Dependencies must be strings or lists of strings")
+
+
+def _extract_dependencies(payload: Dict[str, Any], env: Optional[str]) -> List[str]:
+    raw = payload.get("dependencies")
+    if raw in (None, ""):
+        return []
+
+    collected: List[str] = []
+
+    def extend(values: List[str]) -> None:
+        for val in values:
+            if val not in collected:
+                collected.append(val)
+
+    if isinstance(raw, list):
+        for entry in raw:
+            if isinstance(entry, str):
+                extend(_as_dependency_list(entry))
+                continue
+            if isinstance(entry, dict):
+                if not _matches_env(entry.get("env"), env):
+                    continue
+                if "packages" in entry:
+                    extend(_as_dependency_list(entry.get("packages")))
+                elif "dependencies" in entry:
+                    extend(_as_dependency_list(entry.get("dependencies")))
+                elif "package" in entry:
+                    extend(_as_dependency_list(entry.get("package")))
+                else:
+                    raise ValueError("Dependency dict entries require 'packages' or 'package'")
+                continue
+            raise ValueError("Dependencies list may contain strings or mappings with env/packages")
+    elif isinstance(raw, dict):
+        for key, value in raw.items():
+            key_lower = str(key).strip().lower()
+            if key_lower in {"all", "base", "default", "*"}:
+                extend(_as_dependency_list(value))
+                continue
+            if key_lower == "envs":
+                env_entries = value
+                if not isinstance(env_entries, list):
+                    raise ValueError("dependencies.envs must be a list of mappings")
+                for entry in env_entries:
+                    if not isinstance(entry, dict):
+                        raise ValueError("dependencies.envs entries must be mappings")
+                    if not _matches_env(entry.get("env"), env):
+                        continue
+                    extend(_as_dependency_list(entry.get("packages") or entry.get("dependencies") or entry.get("package")))
+                continue
+            if not _matches_env(key, env):
+                continue
+            extend(_as_dependency_list(value))
+    else:
+        extend(_as_dependency_list(raw))
+
+    return collected
+
+
 def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optional[str], model_id: Optional[str], base_path: Optional[Path] = None) -> ModelConfiguration:
     model_section = payload.get("model") or {}
     config_model_id = model_section.get("id") or model_section.get("model_id")
@@ -441,6 +516,8 @@ def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optiona
     if not isinstance(context, dict):
         raise ValueError("Context section must be a mapping")
 
+    dependencies = _extract_dependencies(payload, env)
+
     return ModelConfiguration(
         raw=payload,
         model=model_section,
@@ -450,6 +527,7 @@ def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optiona
         coefficients=coefficients,
         evaluation=evaluation,
         context=context,
+        dependencies=dependencies,
     )
 
 
