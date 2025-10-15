@@ -100,66 +100,66 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
         else:
             alpha = pm.Normal("alpha", mu=0.0, sigma=10.0)
 
-    beta_vars: List[Any] = []
+        beta_vars: List[Any] = []
 
-    if use_coefficients:
-        variable_cfg: Dict[str, Dict[str, Any]] = {}
-        for entry in coeff_cfg.get("variables", []) or []:
-            if isinstance(entry, dict) and entry.get("name"):
-                variable_cfg[str(entry["name"])] = entry
+        if use_coefficients:
+            variable_cfg: Dict[str, Dict[str, Any]] = {}
+            for entry in coeff_cfg.get("variables", []) or []:
+                if isinstance(entry, dict) and entry.get("name"):
+                    variable_cfg[str(entry["name"])] = entry
 
-        for name in feature_names:
-            spec = variable_cfg.get(name, {})
-            dist_i = str(spec.get("distribution", "normal")).lower()
-            rv_name = f"beta_{name}".replace(" ", "_").replace("[", "_").replace("]", "_")
-            if dist_i in ("normal",):
-                mu_i = float(spec.get("mu", spec.get("mean", 0.0)))
-                sigma_i = float(spec.get("sigma", spec.get("tau", 10.0)))
-                beta_vars.append(pm.Normal(rv_name, mu=mu_i, sigma=sigma_i))
-            elif dist_i in ("half_normal", "halfnormal"):
-                sigma_i = float(spec.get("sigma", spec.get("scale", 1.0)))
-                beta_vars.append(pm.HalfNormal(rv_name, sigma=sigma_i))
-            elif dist_i in ("gamma", "erlang"):
-                shape_i = float(spec.get("shape", 2.0))
-                rate_i = float(spec.get("rate", 1.0))
-                beta_vars.append(pm.Gamma(rv_name, alpha=shape_i, beta=rate_i))
-            else:
-                raise ValueError(f"Unsupported coefficient distribution for '{name}': {dist_i}")
-    else:
-        beta_prior = priors.get("beta", {})
-        beta_dist_raw = beta_prior.get("distribution", "normal")
+            for name in feature_names:
+                spec = variable_cfg.get(name, {})
+                dist_i = str(spec.get("distribution", "normal")).lower()
+                rv_name = f"beta_{name}".replace(" ", "_").replace("[", "_").replace("]", "_")
+                if dist_i in ("normal",):
+                    mu_i = float(spec.get("mu", spec.get("mean", 0.0)))
+                    sigma_i = float(spec.get("sigma", spec.get("tau", 10.0)))
+                    beta_vars.append(pm.Normal(rv_name, mu=mu_i, sigma=sigma_i))
+                elif dist_i in ("half_normal", "halfnormal"):
+                    sigma_i = float(spec.get("sigma", spec.get("scale", 1.0)))
+                    beta_vars.append(pm.HalfNormal(rv_name, sigma=sigma_i))
+                elif dist_i in ("gamma", "erlang"):
+                    shape_i = float(spec.get("shape", 2.0))
+                    rate_i = float(spec.get("rate", 1.0))
+                    beta_vars.append(pm.Gamma(rv_name, alpha=shape_i, beta=rate_i))
+                else:
+                    raise ValueError(f"Unsupported coefficient distribution for '{name}': {dist_i}")
+        else:
+            beta_prior = priors.get("beta", {})
+            beta_dist_raw = beta_prior.get("distribution", "normal")
 
-        def _legacy_param(name: str, default: float, i: int) -> float:
-            val = beta_prior.get(name, None)
-            if isinstance(val, list):
-                if len(val) != p:
-                    raise ValueError(f"beta.{name} length must equal number of features")
-                return float(val[i]) if val[i] is not None else float(default)
-            if val is None:
-                return float(default)
-            return float(val)
+            def _legacy_param(name: str, default: float, i: int) -> float:
+                val = beta_prior.get(name, None)
+                if isinstance(val, list):
+                    if len(val) != p:
+                        raise ValueError(f"beta.{name} length must equal number of features")
+                    return float(val[i]) if val[i] is not None else float(default)
+                if val is None:
+                    return float(default)
+                return float(val)
 
-        for i, name in enumerate(feature_names):
-            if isinstance(beta_dist_raw, list):
-                if len(beta_dist_raw) != p:
-                    raise ValueError("beta.distribution length must equal number of features")
-                dist_i = str(beta_dist_raw[i]).lower()
-            else:
-                dist_i = str(beta_dist_raw).lower()
-            rv_name = f"beta_{name}".replace(" ", "_").replace("[", "_").replace("]", "_")
-            if dist_i in ("normal",):
-                mu_i = _legacy_param("mu", 0.0, i)
-                tau_i = _legacy_param("tau", 10.0, i)
-                beta_vars.append(pm.Normal(rv_name, mu=mu_i, sigma=tau_i))
-            elif dist_i in ("half_normal", "halfnormal"):
-                scale_i = _legacy_param("scale", 1.0, i)
-                beta_vars.append(pm.HalfNormal(rv_name, sigma=scale_i))
-            elif dist_i in ("gamma", "erlang"):
-                shape_i = _legacy_param("shape", 2.0, i)
-                rate_i = _legacy_param("rate", 1.0, i)
-                beta_vars.append(pm.Gamma(rv_name, alpha=shape_i, beta=rate_i))
-            else:
-                raise ValueError(f"Unsupported beta prior distribution: {dist_i}")
+            for i, name in enumerate(feature_names):
+                if isinstance(beta_dist_raw, list):
+                    if len(beta_dist_raw) != p:
+                        raise ValueError("beta.distribution length must equal number of features")
+                    dist_i = str(beta_dist_raw[i]).lower()
+                else:
+                    dist_i = str(beta_dist_raw).lower()
+                rv_name = f"beta_{name}".replace(" ", "_").replace("[", "_").replace("]", "_")
+                if dist_i in ("normal",):
+                    mu_i = _legacy_param("mu", 0.0, i)
+                    tau_i = _legacy_param("tau", 10.0, i)
+                    beta_vars.append(pm.Normal(rv_name, mu=mu_i, sigma=tau_i))
+                elif dist_i in ("half_normal", "halfnormal"):
+                    scale_i = _legacy_param("scale", 1.0, i)
+                    beta_vars.append(pm.HalfNormal(rv_name, sigma=scale_i))
+                elif dist_i in ("gamma", "erlang"):
+                    shape_i = _legacy_param("shape", 2.0, i)
+                    rate_i = _legacy_param("rate", 1.0, i)
+                    beta_vars.append(pm.Gamma(rv_name, alpha=shape_i, beta=rate_i))
+                else:
+                    raise ValueError(f"Unsupported beta prior distribution: {dist_i}")
 
         beta_vec = pm.math.stack(beta_vars)
 
@@ -195,14 +195,19 @@ def pymc_linear_nuts(inputs: Dict[str, Any], params: Dict[str, Any], context) ->
     y_pred = (alpha_mean + X_arr.dot(beta_mean_vec)).tolist()
 
     diagnostics: Dict[str, Any] = {
-        "alpha": alpha_mean,
-        "draws": draws,
-        "tune": tune,
-        "target_accept": target_accept,
-        "chains": chains,
+        "coefficients_model": {
+            "alpha": alpha_mean,
+            "dv_sigma": float(idata.posterior["sigma"].values.mean())
+        },
+        "param_values": {
+            "draws": draws,
+            "tune": tune,
+            "target_accept": target_accept,
+            "chains": chains,
+        },
     }
     for i, name in enumerate(feature_names):
-        diagnostics[f"coef[{name}]"] = float(beta_mean_vec[i])
+        diagnostics["coefficients_model"][f"coef[{name}]"] = float(beta_mean_vec[i])
 
     metadata_coeffs = coeff_cfg if use_coefficients else {"legacy_priors": priors.get("beta")}
     sigma_meta = {"distribution": sigma_dist}
@@ -432,21 +437,26 @@ def pymc_hierarchical_mmm(inputs: Dict[str, Any], params: Dict[str, Any], contex
     ).tolist()
 
     diagnostics: Dict[str, Any] = {
-        "alpha": alpha_mean,
-        "sigma_geo": sigma_geo_mean,
-        "sigma_brand": sigma_brand_mean,
-        "draws": draws,
-        "tune": tune,
-        "target_accept": target_accept,
-        "chains": chains,
+        "coefficients_model": {
+            "alpha": alpha_mean,
+            "sigma_geo": sigma_geo_mean,
+            "sigma_brand": sigma_brand_mean,
+            "dv_sigma": float(idata.posterior["sigma"].values.mean()),
+        },
+        "param_values": {
+            "draws": draws,
+            "tune": tune,
+            "target_accept": target_accept,
+            "chains": chains,
+        },
     }
     for i, name in enumerate(feature_names):
-        diagnostics[f"coef[{name}]"] = float(beta_mean_vec[i])
+        diagnostics["coefficients_model"][f"coef[{name}]"] = float(beta_mean_vec[i])
     # Include group intercept summaries for interpretability
     for i, g in enumerate(geos):
-        diagnostics[f"alpha_geo[{g}]"] = float(alpha_geo_mean[i])
+        diagnostics["coefficients_model"][f"alpha_geo[{g}]"] = float(alpha_geo_mean[i])
     for i, b in enumerate(brands):
-        diagnostics[f"alpha_brand[{b}]"] = float(alpha_brand_mean[i])
+        diagnostics["coefficients_model"][f"alpha_brand[{b}]"] = float(alpha_brand_mean[i])
 
     sigma_meta = {"distribution": sigma_dist}
     if sigma_dist in ("half_normal", "halfnormal"):
