@@ -480,6 +480,105 @@ def _prepare_evaluation(
     return spec
 
 
+def _perform_model_run(cfg: ModelConfiguration, payload: RunRequest) -> RunResponse:
+    variables, grouped = build_variables(cfg.variables, payload.data_sources)
+    combined: Dict[str, Any] = dict(variables)
+    combined.update(grouped)
+
+    input_keys = payload.inputs or cfg.model.get("inputs") or list(variables.keys())
+    inputs: Dict[str, DataRef] = {}
+    for key in input_keys:
+        if key not in combined:
+            raise ValueError(f"Input key '{key}' not produced by configuration")
+        inputs[key] = DataRef(ref_type=DataRefType.INLINE, inline=combined[key])
+
+    params = dict(cfg.params)
+    if payload.params:
+        for key, value in payload.params.items():
+            params[key] = value
+
+    coeff_payload = cfg.coefficients.to_runner_params()
+    for key, value in coeff_payload.items():
+        params.setdefault(key, value)
+
+    context_dict = dict(cfg.context)
+    if payload.context:
+        context_dict.update(payload.context)
+    context = ExecutionContext(**context_dict)
+
+    target_key = None
+    if payload.evaluation is not None:
+        target_key = payload.evaluation.y_true_key
+    elif cfg.evaluation is not None:
+        target_key = cfg.evaluation.y_true_key
+
+    total_length = 0
+    if target_key and isinstance(combined.get(target_key), list):
+        total_length = len(combined[target_key])
+    else:
+        for key in input_keys:
+            value = combined.get(key)
+            if isinstance(value, list):
+                total_length = len(value)
+                break
+
+    eval_spec = _prepare_evaluation(cfg, payload.evaluation, total_length)
+
+    runner = LibraryModelRunner(max_workers=1, max_active_runs=1)
+    runner.set_run_store(InMemoryRunStore())
+    metric_runner = LibraryMetricRunner()
+    zoo = ModelZoo(
+        model_registry=model_registry,
+        metric_registry=metric_registry,
+        model_runner=runner,
+        metric_runner=metric_runner,
+        validator=validator,
+        binding_registry=binding_registry,
+    )
+
+    request_obj = ModelRunRequest(
+        model_id=cfg.model["id"],
+        inputs=inputs,
+        params=params,
+        context=context,
+        evaluation=eval_spec,
+    )
+
+    handle = zoo.submit_run(request_obj)
+
+    timeout = context.timeout_s or 300
+    deadline = time.monotonic() + float(timeout)
+    while True:
+        res = zoo.get_run_result(handle.run_id)
+        if res.status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED):
+            result = res
+            break
+        if time.monotonic() > deadline:
+            result = res
+            break
+        time.sleep(0.05)
+    else:
+        result = zoo.get_run_result(handle.run_id)
+
+    summary_text = None
+    try:
+        summary_text = r_style_summary_string(result.summary) if result.summary else None
+    except Exception:
+        summary_text = None
+
+    return RunResponse(
+        run_id=handle.run_id,
+        status=result.status.value,
+        predictions=_dataref_payload(result.predictions),
+        diagnostics=result.diagnostics or {},
+        artifacts=_artifacts_payload(result.artifacts or {}),
+        eval_train=result.eval_train or {},
+        eval_valid=result.eval_valid or {},
+        summary=result.summary or {},
+        summary_text=summary_text,
+    )
+
+
 @app.get("/health", tags=["system"])
 def healthcheck() -> Dict[str, str]:
     return {"status": "ok"}
