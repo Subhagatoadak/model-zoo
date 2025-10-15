@@ -64,7 +64,7 @@ Client → FastAPI (uvicorn) → RegistryDatabase (psycopg) → PostgreSQL
    python examples/register_model_via_api.py --config configs/linear_regression.json --env dev
    ```
 
-   For a fully commented walkthrough (marketing mix example), open `docs/notebooks/marketing_mix_registry_walkthrough.ipynb` in Jupyter.
+   For a fully commented walkthrough (marketing mix example), open `docs/notebooks/marketing_mix_registry_walkthrough.ipynb` in Jupyter. A dedicated table-loading demo lives at `docs/notebooks/config_table_loader_demo.ipynb`.
 
 4. List registered models:
 

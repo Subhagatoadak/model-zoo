@@ -244,8 +244,6 @@ model_registry = ModelRegistry()
 metric_registry = MetricRegistry()
 binding_registry = InMemoryBindingRegistry()
 validator: ParamValidationService = DefaultParamValidator()
-run_manager = RunManager()
-run_executor = ThreadPoolExecutor(max_workers=4)
 
 app = FastAPI(title="Model Zoo Registry API", version="0.1.0")
 
@@ -661,3 +659,7 @@ class RunManager:
     def list_jobs(self) -> List[AsyncRunJob]:
         with self._lock:
             return list(self._jobs.values())
+
+
+run_manager = RunManager()
+run_executor = ThreadPoolExecutor(max_workers=4)
