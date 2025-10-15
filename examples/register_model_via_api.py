@@ -10,10 +10,11 @@ The script demonstrates how to:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 from urllib import error, request, parse
 
 
@@ -65,16 +66,30 @@ def main() -> None:
     parser.add_argument("--slope", type=float, default=2.0, help="Slope for synthetic data when --run is used")
     parser.add_argument("--intercept", type=float, default=1.0, help="Intercept for synthetic data when --run is used")
     parser.add_argument("--noise", type=float, default=0.1, help="Noise sigma for synthetic data when --run is used")
+    parser.add_argument("--coeff-table", type=Path, default=None, help="Embed coefficient priors from a CSV before registering")
     args = parser.parse_args()
 
     config_path = Path(args.config)
     if not config_path.exists():
         raise SystemExit(f"Configuration file not found: {config_path}")
 
+    config_payload = json.loads(config_path.read_text())
+
+    if args.coeff_table:
+        if not args.coeff_table.exists():
+            raise SystemExit(f"Coefficient table not found: {args.coeff_table}")
+        with args.coeff_table.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            table_rows: List[Dict[str, Any]] = [
+                {k: (v if v != "" else None) for k, v in row.items()} for row in reader
+            ]
+        priors_section = config_payload.setdefault("coefficient_priors", {})
+        priors_section["tables"] = [{"content": table_rows}]
+
     payload = {
         "env": args.env,
         "model_id": args.model_id,
-        "config": json.loads(config_path.read_text()),
+        "config": config_payload,
     }
 
     endpoint = parse.urljoin(args.base_url.rstrip("/") + "/", "registry/configs")

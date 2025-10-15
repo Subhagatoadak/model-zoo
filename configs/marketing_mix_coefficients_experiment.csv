@@ -1,0 +1,4 @@
+name,distribution,params.mu,params.sigma,params.shape,params.rate,constraints.sign,constraints.lower,constraints.upper
+tv,normal,2.0,1.0,,,positive,0.0,
+social,gamma,,,2.0,1.0,positive,0.0,
+digital,normal,0.6,0.3,,,positive,,
