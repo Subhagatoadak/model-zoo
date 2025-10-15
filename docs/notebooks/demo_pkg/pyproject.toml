@@ -1,0 +1,9 @@
+[build-system]
+requires = ['setuptools>=68', 'wheel']
+build-backend = 'setuptools.build_meta'
+
+[project]
+name = 'custom_logit_model'
+version = '0.1.0'
+description = 'Demo logistic regression package for Model Zoo'
+dependencies = ['scikit-learn>=1.4', 'numpy>=1.24']
