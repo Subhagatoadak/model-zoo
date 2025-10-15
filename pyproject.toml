@@ -23,7 +23,8 @@ dependencies = [
   "uvicorn[standard]>=0.27",
   "pymc",
   "pandas",
-  "packaging>=23.0"
+  "packaging>=23.0",
+  "requests>=2.31"
 ]
 
 [project.optional-dependencies]
