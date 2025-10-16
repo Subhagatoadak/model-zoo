@@ -234,6 +234,9 @@ def _resolve_postgres_dsn() -> str:
             env_settings = read_env_file(env_file)
         except FileNotFoundError:
             env_settings = {}
+        else:
+            for key, value in env_settings.items():
+                os.environ.setdefault(key, value)
 
     dsn = os.environ.get("POSTGRES_DSN") or env_settings.get("POSTGRES_DSN")
     if dsn:
@@ -400,7 +403,7 @@ def _register_model_spec_from_configuration(cfg: ModelConfiguration) -> ModelSpe
 
         if binding_kind == BindingKind.LIBRARY:
             if dependencies:
-                dep_env = dependency_manager.ensure(dependencies)
+                dep_env = dependency_manager.ensure(dependencies, cfg.dependency_options)
                 if dep_env is not None:
                     dependency_manager.apply(dep_env)
                     extra_paths = dep_env.import_paths

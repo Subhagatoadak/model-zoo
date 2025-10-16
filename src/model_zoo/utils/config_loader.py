@@ -25,13 +25,15 @@ relevant rows.
 """
 from __future__ import annotations
 
+import csv
+import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
-import json
-import csv
 
 from .config_tables import hyperparam_space_from_master, params_from_engine
+from .dependency_manager import DependencyOptions, RepositoryCredentials
 from ..contracts.hyperparams import HyperParamSpace
 
 
@@ -227,6 +229,7 @@ class ModelConfiguration:
     evaluation: Optional[EvaluationConfig]
     context: Dict[str, Any]
     dependencies: List[str] = field(default_factory=list)
+    dependency_options: DependencyOptions = field(default_factory=DependencyOptions)
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -484,6 +487,130 @@ def _extract_dependencies(payload: Dict[str, Any], env: Optional[str]) -> List[s
     return collected
 
 
+def _parse_repository_entry(raw: Any, env: Optional[str]) -> Optional[RepositoryCredentials]:
+    """Parse a repository configuration entry into credentials."""
+
+    def _from_mapping(data: Dict[str, Any]) -> RepositoryCredentials:
+        url = data.get("url") or data.get("index_url") or data.get("repository")
+        if not url or not str(url).strip():
+            raise ValueError("Repository configuration requires a 'url'")
+        username = data.get("username")
+        password = data.get("password")
+        password_env = data.get("password_env")
+        return RepositoryCredentials(
+            url=str(url).strip(),
+            username=str(username).strip() if isinstance(username, str) and username.strip() else None,
+            password=str(password) if isinstance(password, str) and password else None,
+            password_env=str(password_env).strip() if isinstance(password_env, str) and password_env.strip() else None,
+        )
+
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        value = raw.strip()
+        if not value:
+            return None
+        return RepositoryCredentials(url=value)
+    if isinstance(raw, dict):
+        if "env" in raw and not _matches_env(raw.get("env"), env):
+            return None
+        return _from_mapping(raw)
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and not _matches_env(item.get("env"), env):
+                continue
+            repo = _parse_repository_entry(item, env)
+            if repo is not None:
+                return repo
+        return None
+    raise ValueError("Repository entries must be strings, mappings, or lists of mappings")
+
+
+def _extract_dependency_options(payload: Dict[str, Any], env: Optional[str]) -> DependencyOptions:
+    section = payload.get("dependency_options")
+    if section in (None, ""):
+        return DependencyOptions()
+    if not isinstance(section, dict):
+        raise ValueError("dependency_options must be a mapping")
+
+    index_entry = _parse_repository_entry(section.get("index") or section.get("index_url"), env)
+
+    extras_raw = section.get("extra_index_urls") or section.get("extra_indexes") or []
+    extras: List[RepositoryCredentials] = []
+    if isinstance(extras_raw, (str, dict)):
+        extras_raw = [extras_raw]
+    if isinstance(extras_raw, list):
+        for item in extras_raw:
+            repo = _parse_repository_entry(item, env)
+            if repo is not None:
+                extras.append(repo)
+    else:
+        raise ValueError("dependency_options.extra_index_urls must be a list, string, or mapping")
+
+    trusted_hosts_raw = section.get("trusted_hosts") or []
+    if isinstance(trusted_hosts_raw, (str, dict)):
+        trusted_hosts_raw = [trusted_hosts_raw]
+    trusted_hosts: List[str] = []
+    for entry in trusted_hosts_raw:
+        if isinstance(entry, str):
+            host = entry.strip()
+            if host:
+                trusted_hosts.append(host)
+        elif isinstance(entry, dict):
+            if not _matches_env(entry.get("env"), env):
+                continue
+            host_value = entry.get("host") or entry.get("value")
+            if isinstance(host_value, str) and host_value.strip():
+                trusted_hosts.append(host_value.strip())
+        else:
+            raise ValueError("dependency_options.trusted_hosts entries must be strings or mappings")
+
+    env_overrides = section.get("env") or {}
+    env_map: Dict[str, str] = {}
+    if isinstance(env_overrides, dict):
+        for key, value in env_overrides.items():
+            key_str = str(key)
+            resolved: Optional[str] = None
+            optional = False
+            if isinstance(value, dict):
+                if not _matches_env(value.get("env"), env):
+                    continue
+                optional = bool(value.get("optional", False))
+                if "value" in value:
+                    resolved = value.get("value")
+                else:
+                    source_key = (
+                        value.get("from_env")
+                        or value.get("from_env_file")
+                        or value.get("env_key")
+                        or value.get("env_var")
+                    )
+                    if not source_key:
+                        raise ValueError(
+                            "dependency_options.env entries must provide either 'value' or 'from_env'"
+                        )
+                    resolved = os.environ.get(str(source_key))
+            else:
+                resolved = value
+
+            if resolved is None:
+                if optional:
+                    continue
+                raise ValueError(
+                    f"dependency_options.env requires environment variable '{key_str}' to be set"
+                )
+            env_map[key_str] = str(resolved)
+    elif env_overrides not in (None, ""):
+        raise ValueError("dependency_options.env must be a mapping of environment variables")
+
+    return DependencyOptions(
+        index=index_entry,
+        extras=extras,
+        trusted_hosts=trusted_hosts,
+        env=env_map,
+    )
+
+
 def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optional[str], model_id: Optional[str], base_path: Optional[Path] = None) -> ModelConfiguration:
     model_section = payload.get("model") or {}
     config_model_id = model_section.get("id") or model_section.get("model_id")
@@ -517,6 +644,7 @@ def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optiona
         raise ValueError("Context section must be a mapping")
 
     dependencies = _extract_dependencies(payload, env)
+    dependency_options = _extract_dependency_options(payload, env)
 
     return ModelConfiguration(
         raw=payload,
@@ -528,6 +656,7 @@ def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optiona
         evaluation=evaluation,
         context=context,
         dependencies=dependencies,
+        dependency_options=dependency_options,
     )
 
 
