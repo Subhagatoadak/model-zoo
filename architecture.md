@@ -108,62 +108,142 @@ This document summarises the Model Zoo system at two abstraction levels: a high-
 ## Class Diagram (visual)
 
 ```
-┌─────────────────────────────┐
-│ ModelConfiguration          │
-│─────────────────────────────│
-│ + raw: Dict[str, Any]       │
-│ + model: Dict[str, Any]     │
-│ + hyperparam_space          │
-│ + params: Dict[str, Any]    │
-│ + variables: VariableConfig │
-│ + coefficients              │
-│ + evaluation                │
-│ + context: Dict[str, Any]   │
-│ + dependencies: List[str]   │
-│ + dependency_options        │
-└───────────────▲─────────────┘
-                │produced by
-                │
-┌───────────────┴─────────────┐
-│ ConfigLoader (functions)    │
-│  - load_model_configuration │
-│  - _extract_dependencies    │
-│  - _extract_dependency_opts │
-└───────────────┬─────────────┘
-                │feeds
-                │
-┌───────────────▼─────────────┐
-│ ModelZoo                    │
-│─────────────────────────────│
-│ + submit_run(...)           │
-│ + get_run_result(...)       │
-│  uses registries, runners   │
-└───────────────┬─────────────┘
-                │delegates
-                │
-┌───────────────▼─────────────┐        ┌─────────────────────────────┐
-│ LibraryModelRunner          │◀───────┤ ExecutionBinding            │
-│─────────────────────────────│        │─────────────────────────────│
-│ + submit(req)               │        │ + bound_id, kind            │
-│ + result(handle)            │        │ + module, callable, paths   │
-│ + cancel(run_id)            │        │ + dependencies Tuple[str]   │
-└───────────────┬─────────────┘        └─────────────────────────────┘
-                │requests
-                │deps
-┌───────────────▼─────────────┐
-│ DependencyManager           │
-│─────────────────────────────│
-│ + ensure(deps, options)     │
-│ + apply(env)                │
-│                             │
-│ ┌─────────────────────────┐ │
-│ │ DependencyEnvironment   │ │
-│ │  - key                  │ │
-│ │  - location             │ │
-│ │  - requirements Tuple   │ │
-│ └─────────────────────────┘ │
-└─────────────────────────────┘
+                        ┌───────────────────────────────────┐
+                        │ ModelConfiguration                │
+                        │───────────────────────────────────│
+                        │ + raw: Dict[str, Any]             │
+                        │ + model: Dict[str, Any]           │
+                        │ + hyperparam_space: HyperParam... │
+                        │ + params: Dict[str, Any]          │
+                        │ + variables: VariableConfig       │
+                        │ + coefficients: CoefficientConfig │
+                        │ + evaluation: Optional[...]       │
+                        │ + context: Dict[str, Any]         │
+                        │ + dependencies: List[str]         │
+                        │ + dependency_options: Dependency..│
+                        └──────────────▲────────────────────┘
+                                       │created by
+                                       │
+┌──────────────────────────────────────┴─────────────────────────────────┐
+│ Config Loader Helpers (module)                                         │
+│────────────────────────────────────────────────────────────────────────│
+│ load_model_configuration*                                              │
+│  └─ _load_model_configuration_from_payload                             │
+│         ├─ _extract_variables                                          │
+│         ├─ _extract_coefficients                                       │
+│         ├─ _extract_dependencies                                       │
+│         └─ _extract_dependency_options                                 │
+└──────────────────────────────────────┬─────────────────────────────────┘
+                                       │produces configs for
+                                       │
+┌──────────────────────────────────────▼─────────────────────────────────┐
+│ ModelZoo (facade)                                                       │
+│────────────────────────────────────────────────────────────────────────│
+│ + submit_run(request: ModelRunRequest)                                 │
+│ + get_run_result(run_id: str)                                          │
+│ + cancel_run(run_id: str)                                              │
+│ - model_registry: ModelRegistry                                        │
+│ - metric_registry: MetricRegistry                                      │
+│ - model_runner: ModelRunner                                            │
+│ - metric_runner: MetricRunner                                          │
+│ - dependency_manager: DependencyManager                                │
+└───────────────────────────┬─────────────────────────────────────────────┘
+                            │delegates library executions to
+                            │
+┌───────────────────────────▼─────────────────────────────────────────────┐
+│ LibraryModelRunner                                                      │
+│────────────────────────────────────────────────────────────────────────│
+│ + submit(req: ModelRunRequest) → ModelRunHandle                         │
+│ + result(run_id: str) → ModelRunResult                                  │
+│ + cancel(run_id: str)                                                   │
+│ - dependency_manager: DependencyManager                                 │
+│ - binding_registry: Binding registry                                    │
+│ - run_store: Optional[RunStore]                                         │
+└────────────────────┬────────────────────────────────────────────────────┘
+                     │requires dependency env from
+                     │
+┌────────────────────▼────────────────────────────────────────────────────┐
+│ DependencyManager                                                       │
+│────────────────────────────────────────────────────────────────────────│
+│ + ensure(deps: Iterable[str], options: DependencyOptions)               │
+│      → Optional[DependencyEnvironment]                                  │
+│ + apply(env: DependencyEnvironment)                                     │
+│ - base_dir: Path                                                        │
+│ - normalize()                                                           │
+│ - pip installation w/ logging                                           │
+│                                                                        │
+│   ┌────────────────────────────┐                                        │
+│   │ DependencyEnvironment      │                                        │
+│   │────────────────────────────│                                        │
+│   │ + key: str                 │                                        │
+│   │ + location: Path           │                                        │
+│   │ + requirements: Sequence[str]                                       │
+│   │ + import_paths → List[str] (property)                               │
+│   └────────────────────────────┘                                        │
+└────────────────────────────────────────────────────────────────────────┘
+                                         ▲
+                                         │embedded in
+                                         │
+┌────────────────────────────────────────▼────────────────────────────────┐
+│ ExecutionBinding                                                         │
+│─────────────────────────────────────────────────────────────────────────│
+│ + bound_id: str                                                          │
+│ + kind: BindingKind (library/api/pipeline)                               │
+│ + module: Optional[str]                                                  │
+│ + callable: Optional[str]                                                │
+│ + endpoint/method/options (for API)                                     │
+│ + dependencies: Tuple[str, ...]                                          │
+│ + extra_paths: List[str]                                                 │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Class Dictionary
+
+| Class / Function | Key Attributes & Methods | Notes |
+|------------------|--------------------------|-------|
+| `ModelConfiguration` | `raw`, `model`, `hyperparam_space`, `params`, `variables`, `coefficients`, `evaluation`, `context`, `dependencies`, `dependency_options` | Immutable representation of a loaded JSON config, consumed by API/facade. |
+| `load_model_configuration`, `_extract_*` helpers | Extract sections from JSON, enforce env filtering, resolve dependency options (including env variables and PAT). | Produce `ModelConfiguration`. |
+| `ModelZoo` | `submit_run`, `get_run_result`, `cancel_run`; holds registries, runners, dependency manager. | Facade orchestrating execution and evaluation. |
+| `LibraryModelRunner` | `submit`, `result`, `cancel`; manages thread pool, run store, bindings. | Executes library bindings; interacts with dependency manager. |
+| `DependencyManager` | `ensure`, `apply`, `normalize`; has `DependencyEnvironment`. | Resolves package installs, caches pip environments, writes logs. |
+| `DependencyEnvironment` | `key`, `location`, `requirements`, `import_paths`. | Encapsulates a prepared dependency directory. |
+| `ExecutionBinding` | `bound_id`, `kind`, `module`, `callable`, `endpoint`, `method`, `options`, `dependencies`, `extra_paths`. | Describes how a model/metric should be executed (library vs API). |
+
+---
+
+## API-Based Model Registry
+
+The API also supports an API-based registry model binding, allowing model execution requests to be proxied to external services instead of local Python callables.
+
+### Workflow
+1. Configuration declares a binding with `kind: "api"`, providing `endpoint`, optional `method` and `options`.
+2. On registration, `ExecutionBinding` stores the HTTP target instead of module/callable.
+3. During run submission, `ModelZoo` detects API bindings and calls `_perform_api_binding_run` (`model_zoo.api.app`). Inputs, parameters, and context are serialised and forwarded over HTTP.
+4. Responses are validated for JSON payloads containing `predictions`, `diagnostics`, `artifacts`, etc.
+
+### Architecture Placement
+```
+┌──────────────┐
+│ Model Config │ (binding.kind = "api")
+└──────┬───────┘
+       │ registers ExecutionBinding(kind=API)
+┌──────▼────────┐
+│ BindingRegistry│
+└──────┬────────┘
+       │ run submission detects API binding
+┌──────▼────────┐
+│ API Adapter   │ (_perform_api_binding_run)
+│  - Serialise inputs/params/context
+│  - HTTP request to external service
+│  - Map response into RunResult        External API
+└──────┬────────┘                       ┌───────────────┐
+       │ run status references          │ Model Service │
+       └───────────────────────────────▶│ (user-defined)│
+                                        └───────────────┘
+```
+
+This allows the registry to act as a lightweight orchestrator while delegating actual computation to remote prediction services, A/B testing gateways, or legacy systems.
+
 
 ---
 
@@ -176,4 +256,3 @@ This document summarises the Model Zoo system at two abstraction levels: a high-
 5. **Cleanup**: Dependency caches live under `~/.model_zoo/dependencies/<hash>` and are reused between runs to minimise reinstalls.
 
 This layered architecture isolates configuration parsing, dependency resolution, execution, and persistence concerns, enabling modular extension for new model bindings, metrics, and deployment topologies.
-
