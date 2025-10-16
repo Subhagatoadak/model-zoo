@@ -121,21 +121,56 @@ class ModelingAgent:
     # ------------------------------------------------------------------ #
     def execute_workflow(
         self,
-        config_payload: Mapping[str, Any],
         data_sources: Mapping[str, Any],
+        *,
+        config_payload: Optional[Mapping[str, Any]] = None,
         env: Optional[str] = None,
         params: Optional[Mapping[str, Any]] = None,
         context: Optional[Mapping[str, Any]] = None,
         evaluation_agent: "EvaluationAgent | None" = None,
         reviewer_agent: "OpenAIReviewerAgent | None" = None,
+        register: bool = True,
+        model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Register configuration, run the model, and optionally evaluate."""
+        """Register configuration (optional), run the model, and evaluate/review.
 
-        registration = self.register_configuration(config_payload, env=env)
-        model_id = registration["model_id"]
+        Args:
+            data_sources: Input data passed to the run request.
+            config_payload: Configuration to register (required when ``register`` is True).
+            env: Optional environment label (e.g. ``"prod"``).
+            params: Optional parameter overrides for the run.
+            context: Optional execution context overrides.
+            evaluation_agent: Optional evaluation agent to analyse run outputs.
+            reviewer_agent: Optional OpenAI reviewer agent for LLM insights.
+            register: Whether to register the configuration before running.
+            model_id: Explicit model identifier to run (required if ``register`` is False
+                and ``config_payload`` does not contain a ``model.id``).
+        """
+
+        final_model_id: Optional[str] = model_id
+        registration: Optional[Dict[str, Any]] = None
+
+        if register:
+            if config_payload is None:
+                raise ModelingAgentError(
+                    "config_payload is required when register=True (default behaviour)."
+                )
+            registration = self.register_configuration(config_payload, env=env, model_id_override=model_id)
+            final_model_id = registration["model_id"]
+        else:
+            if final_model_id is None and config_payload is not None:
+                final_model_id = (
+                    config_payload.get("model", {}).get("id") if isinstance(config_payload, Mapping) else None
+                )
+            if not final_model_id:
+                raise ModelingAgentError(
+                    "model_id must be provided (or present in config_payload) when register=False."
+                )
+
+        assert final_model_id is not None  # for type checkers
 
         run_result = self.submit_run(
-            model_id=model_id,
+            model_id=final_model_id,
             data_sources=data_sources,
             env=env,
             params=params,
@@ -155,6 +190,10 @@ class ModelingAgent:
                 config_payload=config_payload,
             )
             run_result.setdefault("review_feedback", review)
+
+        if registration is not None:
+            run_result.setdefault("registration_metadata", registration)
+        run_result.setdefault("model_id", final_model_id)
 
         return run_result
 
