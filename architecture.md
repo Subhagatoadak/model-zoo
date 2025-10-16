@@ -211,6 +211,71 @@ This document summarises the Model Zoo system at two abstraction levels: a high-
 
 ---
 
+## Visual LLD & End-to-End Workflow
+
+```
+STEP 1 ─ REGISTER CONFIGURATION
+┌──────────────────────────┐      POST /registry/configs       ┌────────────────────────────┐
+│ Client (Notebook / CLI)  │ ────────────────────────────────▶ │ FastAPI Config Endpoint    │
+│  - build config_payload  │                                   │  - _bootstrap_environment  │
+│  - include dependency    │                                   │  - load_model_configuration│
+│    options (PAT, etc.)   │                                   │  - register ExecutionBinding
+└─────────────┬────────────┘                                   └─────────────┬──────────────┘
+              │ ModelConfiguration                                     │
+              ▼                                                        ▼
+     ┌────────────────────────┐                         ┌────────────────────────────┐
+     │ Config Loader Helpers  │ ─ produce ───────────▶ │ DependencyManager.ensure    │
+     │  _extract_* sections   │                         │  - resolve PAT / env       │
+     │  validate JSON schema  │                         │  - pip install cached deps │
+     └────────────┬───────────┘                         └────────────┬──────────────┘
+                  │                                                │
+                  ▼                                                ▼
+         ┌─────────────────┐                            ┌─────────────────────────┐
+         │ ModelRegistry   │◀──── upsert spec ───────── │ BindingRegistry         │
+         └─────────────────┘                            │  - stores ExecutionBinding
+                                                       │  - associates dependency env
+                                                       └─────────────────────────┘
+
+STEP 2 ─ SUBMIT RUN
+┌──────────────────────────┐      POST /runs                ┌────────────────────────────┐
+│ Client (Notebook / CLI)  │ ─────────────────────────────▶ │ FastAPI Run Endpoint       │
+│  - provide data refs     │                                │  - fetch stored config     │
+│  - set params/context    │                                │  - load_resulting config   │
+└─────────────┬────────────┘                                │  - build ModelRunRequest   │
+              │ ModelRunRequest                            └─────────────┬──────────────┘
+              ▼                                                        │
+        ┌────────────────────────┐                                     ▼
+        │ ModelZoo Facade        │ ─ orchestrates ─────────────────▶ ┌────────────────────────┐
+        │  - lookup binding      │                                 │ LibraryModelRunner      │
+        │  - ensure dependencies │                                 │  - apply dependency env │
+        │  - submit to runner    │                                 │  - execute callable     │
+        └────────────┬───────────┘                                 │  - persist run state    │
+                     │                                             └────────────┬────────────┘
+                     ▼                                                         │
+             ┌──────────────┐                                                  ▼
+             │ Run Store    │◀─────────── save status/result ───────────────┐
+             └──────────────┘                                                │
+                                                                             │
+STEP 3 ─ POLL RESULTS                                                         │
+┌──────────────────────────┐  GET /runs/{id}     ┌──────────────────────────┐│
+│ Client                   │ ─────────────────▶ │ FastAPI Run Status        ││
+│  - poll for completion   │                   │  - fetch run record       ││
+│  - retrieve output       │                   │  - format response        ││
+└──────────────────────────┘                   └──────────────┬────────────┘│
+                                                             ▼             │
+                                          ┌──────────────────────────────┐  │
+                                          │ Response Payload             │◀─┘
+                                          │  - predictions               │
+                                          │  - diagnostics               │
+                                          │  - artifacts (URIs/inline)   │
+                                          │  - summary text / metrics    │
+                                          └──────────────────────────────┘
+```
+
+This unified diagram highlights the critical components (LD-level classes/modules) and the end-to-end flow—from configuration registration, through dependency preparation and execution, to result retrieval.
+
+---
+
 ## API-Based Model Registry
 
 The API also supports an API-based registry model binding, allowing model execution requests to be proxied to external services instead of local Python callables.
