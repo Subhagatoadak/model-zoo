@@ -1,6 +1,4 @@
-"""
-OpenAI-powered reviewer agent for Model Zoo runs.
-"""
+"""OpenAI-powered reviewer agent for Model Zoo runs."""
 from __future__ import annotations
 
 import json
@@ -8,9 +6,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
-try:
+try:  # pragma: no cover - optional dependency
     from openai import OpenAI
-except ImportError:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - inform users when missing
     OpenAI = None  # type: ignore[assignment]
 
 
@@ -19,36 +17,36 @@ class OpenAIReviewerAgent:
     """Leverage OpenAI models to provide richer run feedback.
 
     Args:
-        model: OpenAI model identifier (e.g. ``"gpt-4o-mini"``).
+        model: OpenAI model identifier (default ``"gpt-5"``).
         api_key: Explicit API key; defaults to ``OPENAI_API_KEY`` environment variable.
-        system_prompt: Primer provided to the LLM before analysis.
+        system_instructions: Primer provided to the LLM before analysis.
         enabled: If ``False``, the agent returns heuristic summaries without calling OpenAI.
     """
 
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5"
     api_key: Optional[str] = None
-    system_prompt: str = (
-        "You are an experienced ML reviewer. Inspect run diagnostics and evaluation "
-        "feedback, highlight issues, explain potential root causes, and suggest next steps. "
-        "Be concise but actionable."
+    system_instructions: str = (
+        "You are an experienced ML reviewer. Inspect run diagnostics and evaluation feedback, "
+        "highlight issues, explain potential root causes, and suggest next steps. Be concise "
+        "but actionable."
     )
     enabled: bool = True
 
-    _client: Optional[Any] = field(init=False, default=None, repr=False)
+    _client: Optional["OpenAI"] = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.enabled:
             return
         if OpenAI is None:
             raise ImportError(
-                "The 'openai' package is required for OpenAIReviewerAgent. "
-                "Install it via 'pip install openai'."
+                "The 'openai' package is required for OpenAIReviewerAgent. Install it via 'pip install openai'."
             )
         api_key = self.api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError(
                 "OpenAI API key not provided. Set OPENAI_API_KEY or pass api_key to OpenAIReviewerAgent."
             )
+        # New SDK: instantiate client once
         self._client = OpenAI(api_key=api_key)
 
     # ------------------------------------------------------------------ #
@@ -61,14 +59,14 @@ class OpenAIReviewerAgent:
     ) -> Dict[str, Any]:
         """Produce a natural-language review of the run outcome."""
 
-        context_block = self._build_context(run_payload, evaluation_summary, config_payload)
+        prompt = self._build_prompt(run_payload, evaluation_summary, config_payload)
 
         if not self.enabled or self._client is None:
             return {
                 "enabled": False,
-                "summary": context_block,
+                "summary": prompt,
                 "explanation": (
-                    "OpenAI reviewer disabled or not configured; returning raw context summary."
+                    "OpenAI reviewer disabled or not configured; returning prompt context instead of LLM feedback."
                 ),
             }
 
@@ -78,19 +76,19 @@ class OpenAIReviewerAgent:
                 input=[
                     {
                         "role": "system",
-                        "content": self.system_prompt,
+                        "content": self.system_instructions,
                     },
                     {
                         "role": "user",
-                        "content": context_block,
+                        "content": prompt,
                     },
                 ],
             )
-            message = self._extract_response_text(response)
+            message = self._extract_output_text(response)
         except Exception as exc:  # pragma: no cover - network call
             message = (
-                "Failed to contact OpenAI reviewer. Returning context summary instead.\n"
-                f"Error: {exc}\n\n{context_block}"
+                "Failed to contact OpenAI reviewer. Returning prompt context instead.\n"
+                f"Error: {exc}\n\n{prompt}"
             )
 
         return {
@@ -101,7 +99,7 @@ class OpenAIReviewerAgent:
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _build_context(
+    def _build_prompt(
         run_payload: Mapping[str, Any],
         evaluation_summary: Optional[Mapping[str, Any]],
         config_payload: Optional[Mapping[str, Any]],
@@ -118,24 +116,36 @@ class OpenAIReviewerAgent:
             }
             parts.append("Relevant configuration excerpt:")
             parts.append(json.dumps(minimal_config, indent=2, default=str))
-        parts.append(
-            "Provide: 1) Overall assessment; 2) Issues or anomalies; 3) Recommendations."
-        )
+        parts.append("Provide: 1) Overall assessment; 2) Issues or anomalies; 3) Recommendations.")
         return "\n".join(parts)
 
     @staticmethod
-    def _extract_response_text(response: Any) -> str:
-        """Handle OpenAI Responses API payloads."""
+    def _extract_output_text(response: Any) -> str:
+        """Extract combined text from the Responses API payload."""
 
+        # Preferred property in new SDK
+        text = getattr(response, "output_text", None)
+        if isinstance(text, str) and text.strip():
+            return text
+
+        # Fallback: aggregate from output items
         try:
-            for item in response.output:
-                if item.type == "message" and item.message.get("content"):
-                    return item.message["content"][0].get("text", "") or ""
+            chunks = []
+            for item in getattr(response, "output", []) or []:
+                if getattr(item, "type", None) == "message":
+                    content = item.message.get("content")
+                    if isinstance(content, list):
+                        for block in content:
+                            piece = block.get("text")
+                            if piece:
+                                chunks.append(piece)
+            if chunks:
+                return "\n".join(chunks)
         except Exception:
             pass
-        # Fallback to legacy data structures
+
+        # Legacy compatibility
         try:
             return response.choices[0].message["content"]  # type: ignore[attr-defined]
         except Exception:
             return str(response)
-

@@ -1,6 +1,7 @@
 """FastAPI application exposing endpoints to register models and configurations."""
 from __future__ import annotations
 
+import logging
 import os
 from importlib import import_module
 from pathlib import Path
@@ -42,6 +43,9 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
+
+
+logger = logging.getLogger(__name__)
 
 
 class RegistryDatabase:
@@ -247,6 +251,7 @@ def _bootstrap_environment() -> None:
         candidates.append(root / ".env")
 
     seen: Set[Path] = set()
+    loaded_from: Optional[Path] = None
     for candidate in candidates:
         candidate = candidate.expanduser().resolve()
         if candidate in seen:
@@ -259,8 +264,21 @@ def _bootstrap_environment() -> None:
         except FileNotFoundError:
             continue
         for key, value in env_settings.items():
-            os.environ.setdefault(key, value)
+            if value is None:
+                continue
+            current = os.environ.get(key)
+            if not current:
+                os.environ[key] = value
+        loaded_from = candidate
+        logger.info("Loaded environment variables from %s", candidate)
         break
+
+    if loaded_from is None:
+        logger.warning("No .env file found; relying on pre-set environment variables")
+
+    if not os.environ.get("AZURE_ARTIFACTS_PAT"):
+        logger.warning("AZURE_ARTIFACTS_PAT is not set; Azure Artifacts dependencies may fail to install")
+
 
 
 def _resolve_postgres_dsn() -> str:
