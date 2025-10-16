@@ -34,6 +34,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from .config_tables import hyperparam_space_from_master, params_from_engine
 from .dependency_manager import DependencyOptions, RepositoryCredentials
+from .env import read_env_file
 from ..contracts.hyperparams import HyperParamSpace
 
 
@@ -526,7 +527,7 @@ def _parse_repository_entry(raw: Any, env: Optional[str]) -> Optional[Repository
     raise ValueError("Repository entries must be strings, mappings, or lists of mappings")
 
 
-def _extract_dependency_options(payload: Dict[str, Any], env: Optional[str]) -> DependencyOptions:
+def _extract_dependency_options(payload: Dict[str, Any], env: Optional[str], base_path: Optional[Path]) -> DependencyOptions:
     section = payload.get("dependency_options")
     if section in (None, ""):
         return DependencyOptions()
@@ -566,6 +567,60 @@ def _extract_dependency_options(payload: Dict[str, Any], env: Optional[str]) -> 
             raise ValueError("dependency_options.trusted_hosts entries must be strings or mappings")
 
     env_overrides = section.get("env") or {}
+    env_cache: Dict[Path, Dict[str, str]] = {}
+
+    def _resolve_env_file_path(raw_path: Path) -> Optional[Path]:
+        candidates: List[Path] = []
+        if raw_path.is_absolute():
+            candidates.append(raw_path)
+        else:
+            if base_path is not None:
+                candidates.append((base_path / raw_path).resolve())
+            candidates.append((Path.cwd() / raw_path).resolve())
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+
+        search_roots: List[Path] = []
+        if base_path is not None:
+            search_roots.append(base_path.resolve())
+        search_roots.append(Path.cwd().resolve())
+        module_root = Path(__file__).resolve().parent
+        search_roots.append(module_root)
+
+        for root in search_roots:
+            for parent in [root] + list(root.parents):
+                candidate = parent / raw_path
+                if candidate.exists():
+                    return candidate
+        return None
+
+    def _load_env_value(lookup_key: str, path_hint: Optional[str] = None) -> Optional[str]:
+        raw_paths: List[Path] = []
+        if path_hint:
+            raw_paths.append(Path(path_hint))
+        env_file_env = os.environ.get("MODEL_ZOO_ENV_FILE")
+        if env_file_env:
+            raw_paths.append(Path(env_file_env))
+        if base_path is not None:
+            raw_paths.append(base_path / ".env")
+        raw_paths.append(Path(".env"))
+
+        for raw in raw_paths:
+            resolved = _resolve_env_file_path(raw)
+            if resolved is None:
+                continue
+            resolved = resolved.resolve()
+            if resolved not in env_cache:
+                try:
+                    env_cache[resolved] = read_env_file(resolved)
+                except FileNotFoundError:
+                    env_cache[resolved] = {}
+            value = env_cache[resolved].get(lookup_key)
+            if value is not None:
+                return value
+        return None
+
     env_map: Dict[str, str] = {}
     if isinstance(env_overrides, dict):
         for key, value in env_overrides.items():
@@ -589,7 +644,10 @@ def _extract_dependency_options(payload: Dict[str, Any], env: Optional[str]) -> 
                         raise ValueError(
                             "dependency_options.env entries must provide either 'value' or 'from_env'"
                         )
-                    resolved = os.environ.get(str(source_key))
+                    source_key_str = str(source_key)
+                    resolved = os.environ.get(source_key_str)
+                    if resolved is None:
+                        resolved = _load_env_value(source_key_str, value.get("env_file") or value.get("file") or value.get("path"))
             else:
                 resolved = value
 
@@ -644,7 +702,7 @@ def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optiona
         raise ValueError("Context section must be a mapping")
 
     dependencies = _extract_dependencies(payload, env)
-    dependency_options = _extract_dependency_options(payload, env)
+    dependency_options = _extract_dependency_options(payload, env, base_path)
 
     return ModelConfiguration(
         raw=payload,

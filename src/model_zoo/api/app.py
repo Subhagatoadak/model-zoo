@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from enum import Enum
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -226,6 +226,43 @@ class RegistryDatabase:
         return None
 
 
+def _bootstrap_environment() -> None:
+    """Ensure core environment variables (e.g., PAT, database creds) are loaded."""
+
+    candidates: List[Path] = []
+
+    explicit = os.environ.get("MODEL_ZOO_ENV_FILE")
+    if explicit:
+        candidates.append(Path(explicit))
+
+    candidates.append(Path(".env"))
+
+    module_path = Path(__file__).resolve()
+    search_roots = [
+        module_path.parent,
+        *module_path.parents,
+        Path.cwd().resolve(),
+    ]
+    for root in search_roots:
+        candidates.append(root / ".env")
+
+    seen: Set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.expanduser().resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if not candidate.exists():
+            continue
+        try:
+            env_settings = read_env_file(candidate)
+        except FileNotFoundError:
+            continue
+        for key, value in env_settings.items():
+            os.environ.setdefault(key, value)
+        break
+
+
 def _resolve_postgres_dsn() -> str:
     env_file = os.environ.get("MODEL_ZOO_ENV_FILE", ".env")
     env_settings: Dict[str, str] = {}
@@ -254,6 +291,7 @@ def _resolve_postgres_dsn() -> str:
     return dsn
 
 
+_bootstrap_environment()
 postgres_dsn = _resolve_postgres_dsn()
 database = RegistryDatabase(postgres_dsn)
 model_registry = ModelRegistry()

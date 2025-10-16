@@ -15,6 +15,9 @@ COPY tests ./tests
 COPY mkdocs.yml ./mkdocs.yml
 COPY docs ./docs
 COPY scripts ./scripts
+COPY .env ./.env
+
+ENV MODEL_ZOO_ENV_FILE=/app/.env
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
