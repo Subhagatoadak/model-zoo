@@ -159,7 +159,8 @@ def params_from_engine(
         rid = row.get("model_id") or row.get("model")
         if str(rid) != str(model_id):
             continue
-        if env is not None and str(row.get("env") or "") != str(env):
+        row_env = row.get("env")
+        if env is not None and row_env not in (None, "") and str(row_env) != str(env):
             continue
         pname = row.get("param") or row.get("name")
         if not pname:

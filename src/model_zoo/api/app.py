@@ -185,8 +185,8 @@ class RegistryDatabase:
         query = "SELECT environment, config, registered_at, updated_at FROM model_configs WHERE model_id = %s"
         params: List[Any] = [model_id]
         if environment is not None:
-            query += " AND (environment = %s OR (environment IS NULL AND %s IS NULL))"
-            params.extend([environment, environment])
+            query += " AND (environment = %s OR environment IS NULL)"
+            params.append(environment)
         query += " ORDER BY environment NULLS LAST"
         with psycopg.connect(self._dsn) as conn:
             with conn.cursor() as cur:

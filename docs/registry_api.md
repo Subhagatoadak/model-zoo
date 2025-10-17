@@ -158,6 +158,18 @@ A configuration JSON must include the following sections:
 
 Use `configs/linear_regression.json` as a template. The API validates types and ensures the hyperparameter schema is coherent.
 
+### Legacy Payloads
+
+If you have a legacy configuration that only exposes `algorithm`, `spec`, `params`, and an external variable table, you can POST it without reshaping. The loader automatically:
+
+- Flattens nested entries under `params` into hyperparameter schema rows and values.
+- Converts `variable_config` data (CSV string, list of dicts, or `{"path": ...}` mapping) into `variables.definitions`.
+- Carries the original content under `context.legacy` so the full payload remains accessible after registration.
+
+Provide `model_id` in the request body or alongside the payload. When no `model.kind` is supplied, the registry stores the converted configuration as a `pipeline` model. You can still augment the converted document later with bindings or metrics.
+
+For an end-to-end example, run `docs/notebooks/legacy_least_squares_demo.ipynb`. The notebook defaults to an in-memory mock client; set `USE_LIVE_API=true` (and optionally `MODEL_ZOO_API_BASE`) to exercise the exact same flow against a running registry instance.
+
 ## Endpoints Summary
 
 | Method | Path                               | Description                                  |

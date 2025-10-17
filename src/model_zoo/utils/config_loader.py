@@ -35,6 +35,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from .config_tables import hyperparam_space_from_master, params_from_engine
 from .dependency_manager import DependencyOptions, RepositoryCredentials
 from .env import read_env_file
+from .legacy_ingest import upgrade_legacy_payload
 from ..contracts.hyperparams import HyperParamSpace
 
 
@@ -670,6 +671,9 @@ def _extract_dependency_options(payload: Dict[str, Any], env: Optional[str], bas
 
 
 def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optional[str], model_id: Optional[str], base_path: Optional[Path] = None) -> ModelConfiguration:
+    legacy_result = upgrade_legacy_payload(payload, model_id_hint=model_id, base_path=base_path)
+    payload = legacy_result.payload
+
     model_section = payload.get("model") or {}
     config_model_id = model_section.get("id") or model_section.get("model_id")
     if model_id is None and config_model_id is None:
@@ -678,12 +682,26 @@ def _load_model_configuration_from_payload(payload: Dict[str, Any], env: Optiona
     model_section["id"] = final_model_id
 
     hyper_section = payload.get("hyperparameters") or {}
-    master_rows = [row for row in hyper_section.get("schema", []) if _matches_env(row.get("env"), env)]
-    if not master_rows:
-        raise ValueError("Configuration requires at least one hyperparameter schema row")
-    space = hyperparam_space_from_master(master_rows)
+    if hyper_section and not isinstance(hyper_section, dict):
+        raise ValueError("Hyperparameters section must be a mapping")
+    schema_entries = hyper_section.get("schema", [])
+    if isinstance(schema_entries, dict):
+        schema_entries = [schema_entries]
+    elif schema_entries in (None, ""):
+        schema_entries = []
+    elif not isinstance(schema_entries, list):
+        raise ValueError("hyperparameters.schema must be a list or mapping")
+    master_rows = [row for row in schema_entries if isinstance(row, dict) and _matches_env(row.get("env"), env)]
+    space = hyperparam_space_from_master(master_rows) if master_rows else HyperParamSpace()
 
-    engine_rows = [row for row in hyper_section.get("values", []) if _matches_env(row.get("env"), env)]
+    values_entries = hyper_section.get("values", [])
+    if isinstance(values_entries, dict):
+        values_entries = [values_entries]
+    elif values_entries in (None, ""):
+        values_entries = []
+    elif not isinstance(values_entries, list):
+        raise ValueError("hyperparameters.values must be a list or mapping")
+    engine_rows = [row for row in values_entries if isinstance(row, dict) and _matches_env(row.get("env"), env)]
     for table_entry in hyper_section.get("tables", []) or []:
         if not isinstance(table_entry, dict):
             continue
